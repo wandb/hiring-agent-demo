@@ -14,6 +14,7 @@ regex
 requests
 wandb
 weave
+weave[scorers]
 streamlit
-fpdf
+PyMuPDF
 langgraph

@@ -2,83 +2,9 @@
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
-# for server.py
-context_prompt = """
-# Job Offer Details
-{job_offer_extract}
-
-# Candidate Application
-{application_extract}
-"""
-
-comparison_prompt = """
-Job Offer Details:
-{offer_dict}
-
-Candidate Application:
-{application_dict}
-
-Based on the job requirements and candidate qualifications, determine if we should proceed with an interview.
-Consider factors like education, experience, skills match and availability.
-"""
-
-guardrail_prompt = """
-Based ONLY on the job requirements and candidate qualifications above, determine if we should proceed with an interview.
-Previous response had hallucinations. Feedback: {guardrail_conclusion}
-Consider ONLY factors mentioned in the documents like education, experience, skills match and availability.
-"""
-
-compare_offer_application_prompt = """
-Job Offer Details:
-{job_offer_extract}
-
-Candidate Application:
-{application_extract}
-
-# Role
-You are an assistant tasked with comparing extracted information from a job application to the details of a job offer. Your goal is to identify alignments, discrepancies, and potential areas for discussion or negotiation.
-
-# Instructions
-Carefully analyze the extracted information from both the job application and the job offer. Compare each category side-by-side and provide a detailed evaluation.
-
-# Steps
-1. **Compare Applicant Details and Job Preferences**:
-   - Verify if the applicant’s desired role matches the offered position.
-   - Check if the applicant’s preferred work location aligns with the job’s location or remote/hybrid options.
-   - Confirm if the applicant’s expected salary aligns with the offered compensation.
-   - Evaluate the alignment of the applicant’s availability/start date with the job’s start date.
-
-2. **Compare Qualifications**:
-   - Match the applicant’s educational background and certifications to the qualifications required or preferred in the job offer.
-   - Identify any additional qualifications in the application that exceed or fall short of the job’s requirements.
-
-3. **Compare Professional Experience**:
-   - Assess whether the applicant’s past roles and responsibilities align with the key responsibilities of the offered role.
-   - Highlight any relevant projects, achievements, or skills from the application that directly align with the job offer.
-
-4. **Compare Career Objectives**:
-   - Evaluate how the applicant’s stated career goals align with the growth opportunities or objectives outlined in the job offer.
-   - Note any areas where the applicant’s goals diverge from the role’s focus.
-
-5. **Identify Gaps and Alignments**:
-   - Highlight areas where the applicant meets, exceeds, or falls short of the job requirements.
-   - Note any potential for negotiation or clarification based on the applicant’s expectations and the job’s offerings.
-
-# Output
-Provide a detailed, category-by-category comparison in a clear and structured format. Summarize key alignments, major discrepancies, and areas for potential discussion or negotiation. Ensure that the analysis is concise, accurate, and actionable.
-"""
-
-class InterviewDecision(BaseModel):
-    """Class representing a first stage hiring decision with explanation. Only considers application and job offer."""
-    decision: bool = Field(description="Whether to move on to interview with the candidate or reject application")
-    reason: str = Field(description="Explanation for the decision")
-
-class InterviewDecision(BaseModel):
-    """Class representing a first stage hiring decision with explanation. Only considers application and job offer."""
-    decision: bool = Field(description="Whether to move on to interview with the candidate or reject application")
-    reason: str = Field(description="Explanation for the decision")
-
-extract_application_prompt = """ Candidate Application: {application}
+# server.py
+## extraction prompts
+extract_application_prompt = """
 # Role
 You are an assistant tasked with extracting and organizing detailed information from a job application for comparison with a job offer.
 
@@ -117,40 +43,12 @@ Carefully analyze the job application and extract the following details. Present
 
 # Output
 Summarize the extracted information clearly, organized under the headings above. Highlight specific skills, qualifications, or experiences relevant to the desired position. Ensure completeness and clarity in your response.
+
+# Candidate Application
+{application}
 """
 
-class CV(BaseModel):
-    """Class to extract information from a CV."""
-
-    first_name: str = Field(description="The first name of the candidate")
-    last_name: str = Field(description="The last name of the candidate")
-    date_of_birth: Optional[str] = Field(default=None, description="The date of birth of the candidate in YYYY-MM-DD format")
-    phone: Optional[str] = Field(default=None, description="The phone number of the candidate")
-    motivation_points: Optional[List[str]] = Field(
-        default=None, description="List of key points describing the candidate's motivation for applying"
-    )
-    relevant_experience: Optional[List[str]] = Field(
-        default=None, description="List of relevant previous work experiences and accomplishments"
-    )
-    highest_qualification: Optional[str] = Field(default=None, description="The highest educational qualification of the candidate")
-    current_profession: Optional[str] = Field(default=None, description="The current profession of the candidate")
-    known_programming_languages: Optional[List[str]] = Field(
-        default=None, description="A list of programming languages known by the candidate, applicable for IT candidates"
-    )
-    num_previous_employers: Optional[int] = Field(
-        default=None, description="The number of previous employers the candidate has worked with"
-    )
-    years_of_experience: Optional[float] = Field(
-        default=None, description="The total number of years of professional experience"
-    )
-    salary_expectations: Optional[float] = Field(
-        default=None, description="The salary expectations of the candidate in numeric format"
-    )
-    availability: Optional[str] = Field(
-        default=None, description="The availability date of the candidate in a human-readable format"
-    )
-
-extract_offer_prompt = """ Job Offer Details: {job_offer} 
+extract_offer_prompt = """
 # Role
 You are an assistant tasked with extracting and organizing detailed information from a job offer for comparison with a job application.
 
@@ -198,7 +96,42 @@ Carefully analyze the job offer and extract the following details. Present the o
 
 # Output
 Summarize the extracted information clearly, organized under the headings above. Highlight discrepancies or alignments between the job offer and the application details. Ensure completeness and clarity in your response.
+
+# Job Offer Details: 
+{job_offer} 
 """
+
+class CV(BaseModel):
+    """Class to extract information from a CV."""
+
+    first_name: str = Field(description="The first name of the candidate")
+    last_name: str = Field(description="The last name of the candidate")
+    date_of_birth: Optional[str] = Field(default=None, description="The date of birth of the candidate in YYYY-MM-DD format")
+    phone: Optional[str] = Field(default=None, description="The phone number of the candidate")
+    motivation_points: Optional[List[str]] = Field(
+        default=None, description="List of key points describing the candidate's motivation for applying"
+    )
+    relevant_experience: Optional[List[str]] = Field(
+        default=None, description="List of relevant previous work experiences and accomplishments"
+    )
+    highest_qualification: Optional[str] = Field(default=None, description="The highest educational qualification of the candidate")
+    current_profession: Optional[str] = Field(default=None, description="The current profession of the candidate")
+    known_programming_languages: Optional[List[str]] = Field(
+        default=None, description="A list of programming languages known by the candidate, applicable for IT candidates"
+    )
+    num_previous_employers: Optional[int] = Field(
+        default=None, description="The number of previous employers the candidate has worked with"
+    )
+    years_of_experience: Optional[float] = Field(
+        default=None, description="The total number of years of professional experience"
+    )
+    salary_expectations: Optional[float] = Field(
+        default=None, description="The salary expectations of the candidate in numeric format"
+    )
+    availability: Optional[str] = Field(
+        default=None, description="The availability date of the candidate in a human-readable format"
+    )
+
 
 class Offer(BaseModel):
     """Class to extract information from a Job position."""
@@ -219,47 +152,93 @@ class Offer(BaseModel):
         default=None, description="Information about the company, such as size, industry, culture and values"
     )
 
-# for evaluate.py
-app_gen_prompt = """ Job Offer Details: {job_offer} 
+## comparison
+compare_offer_application_prompt = """
 # Role
-You are an assistant tasked with creating a tailored job application, including a CV and a cover letter, based on the details provided in a job offer. The goal is to highlight qualifications, experience, and skills that align closely with the job's requirements.
+You are an assistant tasked with comparing extracted information from a job application to the details of a job offer. Your goal is to identify alignments, discrepancies, and potential areas for discussion or negotiation.
 
 # Instructions
-Using the job offer as a guide, draft a complete job application that includes the following:
-
-1. **Cover Letter**:
-   - Address the letter to the hiring manager or company (use a generic salutation if no specific name is provided).
-   - Start with a compelling introduction explaining the interest in the role and the company.
-   - Highlight relevant skills, qualifications, and achievements that directly align with the job description.
-   - Mention specific experiences or projects that demonstrate the ability to excel in the role.
-   - Conclude with a confident call to action, expressing enthusiasm for an interview and the opportunity to contribute.
-
-2. **Curriculum Vitae (CV)**:
-   - Create a professional summary or objective tailored to the role, summarizing key qualifications and career highlights.
-   - List professional experience in reverse chronological order, emphasizing responsibilities and achievements that align with the job requirements.
-   - Include educational background, certifications, and any relevant technical or soft skills.
-   - Add sections for projects, publications, awards, or extracurricular activities if they enhance the application.
-   - Ensure the CV is formatted cleanly and professionally.
+Carefully analyze the extracted information from both the job application and the job offer. Compare each category side-by-side and provide a detailed evaluation.
 
 # Steps
-1. Analyze the job offer to extract key requirements, responsibilities, and qualifications.
-2. Match these with suitable experiences, skills, and achievements to include in the application.
-3. Structure the cover letter and CV clearly, ensuring they are concise, professional, and directly relevant to the role.
+1. **Compare Applicant Details and Job Preferences**:
+   - Verify if the applicant’s desired role matches the offered position.
+   - Check if the applicant’s preferred work location aligns with the job’s location or remote/hybrid options.
+   - Confirm if the applicant’s expected salary aligns with the offered compensation.
+   - Evaluate the alignment of the applicant’s availability/start date with the job’s start date.
 
-# Output Format
-Provide the application in a structured format:
-1. Cover Letter:
-   - Include the salutation, body paragraphs, and a closing statement.
-2. CV:
-   - Professional summary.
-   - Work experience (listed with job title, company, dates, and bullet points for key achievements).
-   - Education (degrees, institutions, and graduation dates).
-   - Skills (grouped by technical, soft, or other categories).
-   - Additional sections (e.g., certifications, projects, awards) if applicable.
+2. **Compare Qualifications**:
+   - Match the applicant’s educational background and certifications to the qualifications required or preferred in the job offer.
+   - Identify any additional qualifications in the application that exceed or fall short of the job’s requirements.
 
-Ensure the tone is professional and tailored to the job offer. Make the application compelling and well-aligned with the employer's expectations.
+3. **Compare Professional Experience**:
+   - Assess whether the applicant’s past roles and responsibilities align with the key responsibilities of the offered role.
+   - Highlight any relevant projects, achievements, or skills from the application that directly align with the job offer.
+
+4. **Compare Career Objectives**:
+   - Evaluate how the applicant’s stated career goals align with the growth opportunities or objectives outlined in the job offer.
+   - Note any areas where the applicant’s goals diverge from the role’s focus.
+
+5. **Identify Gaps and Alignments**:
+   - Highlight areas where the applicant meets, exceeds, or falls short of the job requirements.
+   - Note any potential for negotiation or clarification based on the applicant’s expectations and the job’s offerings.
+
+# Output
+Provide a detailed, category-by-category comparison in a clear and structured format. Summarize key alignments, major discrepancies, and areas for potential discussion or negotiation. Ensure that the analysis is concise, accurate, and actionable.
+
+Job Offer Details:
+{job_offer_extract}
+
+Candidate Application:
+{application_extract}
 """
 
+class InterviewDecision(BaseModel):
+    """Class representing a first stage hiring decision with explanation. Only considers application and job offer."""
+    decision: bool = Field(description="Whether to move on to interview with the candidate or reject application")
+    reason: str = Field(description="Explanation for the decision")
+
+## guardrail
+context_prompt = """
+# Job Offer Details
+{job_offer_extract}
+
+# Candidate Application
+{application_extract}
+"""
+
+guardrail_prompt = """
+Based ONLY on the job requirements and candidate qualifications above, determine if we should proceed with an interview.
+Previous response had hallucinations. Feedback: {guardrail_conclusion}
+Consider ONLY factors mentioned in the documents like education, experience, skills match and availability.
+"""
+
+# for evaluate.py
+reason_comp_prompt = """
+You're a senior hiring manager at an international company. 
+Your goal is to evaluate the decision making of a junior hiring manager.
+
+The junior hiring manager should assess whether to invite a candidate to a job interview based on a job position
+and an application provided by an applicant. To justify their decision the junior hiring manager has to provide a 
+reasoning. 
+
+Evaluate their reasoning by comparing it to a reference reasoning from a seasoned senior hiring manager. 
+Compare the two reasonings to make sure that the junior hiring manager followed the correct reasoning and thought of the most important points to justify their decision. 
+
+Reference Reasoning by senior hiring manager: 
+{p1_reasoning}
+
+Reasoning by junior hiring manager:
+{p2_reasoning}
+"""
+
+class ReasonComparison(BaseModel):
+    """Class that checks whether two reasonings are matching."""
+    reasons_match: bool = Field(description="Whether the reasoning of person 2 matches the ground truth reasoning of person 1")
+    explanation: str = Field(description="A short explanation of what parts overlap")
+
+
+# for generate.py
 app_gen_prompt_pos = """ Job Offer Details: {job_offer} 
 applicant_profile = 
     "name": "John",
@@ -381,36 +360,11 @@ Provide the application in a structured format:
 
 Ensure the tone is generic, lacks enthusiasm, and makes no effort to align with the employer's expectations. Make the application clearly unsuitable for the role.
 """
+
 class SimpleApplicationGeneration(BaseModel):
     application_text: str = Field(description="A realistic mock application")
     interview: bool = Field(description="Whether this application will be proceeded to the interview stage")
-    reason: str = Field(
-        description="""
-        The reason why the interview decision was made the way it was. 
-        Make sure to adapt the reason to the steps a typical hiring manager follows.
-        # Steps
-         1. **Compare Applicant Details and Job Preferences**:
-            - Verify if the applicant’s desired role matches the offered position.
-            - Check if the applicant’s preferred work location aligns with the job’s location or remote/hybrid options.
-            - Confirm if the applicant’s expected salary aligns with the offered compensation.
-            - Evaluate the alignment of the applicant’s availability/start date with the job’s start date.
-
-         2. **Compare Qualifications**:
-            - Match the applicant’s educational background and certifications to the qualifications required or preferred in the job offer.
-            - Identify any additional qualifications in the application that exceed or fall short of the job’s requirements.
-
-         3. **Compare Professional Experience**:
-            - Assess whether the applicant’s past roles and responsibilities align with the key responsibilities of the offered role.
-            - Highlight any relevant projects, achievements, or skills from the application that directly align with the job offer.
-
-         4. **Compare Career Objectives**:
-            - Evaluate how the applicant’s stated career goals align with the growth opportunities or objectives outlined in the job offer.
-            - Note any areas where the applicant’s goals diverge from the role’s focus.
-
-         5. **Identify Gaps and Alignments**:
-            - Highlight areas where the applicant meets, exceeds, or falls short of the job requirements.
-            - Note any potential for negotiation or clarification based on the applicant’s expectations and the job’s offerings."""
-   )
+    reason: str = Field(description="The reason why the interview decision was made the way it was")
 
 class EvaluationExample(BaseModel):
     """Class representing a single evaluation example for testing the hiring agent."""
@@ -424,26 +378,3 @@ class EvaluationExample(BaseModel):
 class EvaluationDataset(BaseModel):
     """Class representing a collection of evaluation examples."""
     examples: List[EvaluationExample] = Field(description="List of evaluation examples for testing")
-
-reason_comp_prompt = """
-You're a senior hiring manager at an international company. 
-Your goal is to evaluate the decision making of a junior hiring manager.
-
-The junior hiring manager should assess whether to invite a candidate to a job interview based on a job position
-and an application provided by an applicant. To justify their decision the junior hiring manager has to provide a 
-reasoning. 
-
-Evaluate their reasoning by comparing it to a reference reasoning from a seasoned senior hiring manager. 
-Compare the two reasonings to make sure that the junior hiring manager followed the correct reasoning and thought of the most important points to justify their decision. 
-
-Reference Reasoning by senior hiring manager: 
-{p1_reasoning}
-
-Reasoning by junior hiring manager:
-{p2_reasoning}
-"""
-
-class ReasonComparison(BaseModel):
-    """Class that checks whether two reasonings are matching."""
-    reasons_match: bool = Field(description="Whether the reasoning of person 2 matches the ground truth reasoning of person 1")
-    explanation: str = Field(description="A short explanation of what parts overlap")

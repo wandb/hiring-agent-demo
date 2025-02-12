@@ -6,7 +6,6 @@ from weave.trace.api import get_current_call
 from weave.trace import urls
 from weave.integrations.bedrock.bedrock_sdk import patch_client
 from langchain_openai import ChatOpenAI
-from langchain_aws import ChatBedrock
 from langgraph.graph import END, StateGraph, START
 from openai import OpenAI
 
@@ -21,10 +20,11 @@ import streamlit as st
 
 from utils.prompt import (
     CV, Offer, InterviewDecision, 
-    context_prompt, comparison_prompt, guardrail_prompt,
+    context_prompt, guardrail_prompt,
     extract_offer_prompt, extract_application_prompt, compare_offer_application_prompt)
 from utils.prepro import extract_text_from_pdf, pdf_to_images
-from utils.evaluate import generate_dataset, decision_match, ReasonScorer
+from utils.evaluate import decision_match, ReasonScorer
+from utils.generate import generate_dataset
 from dotenv import load_dotenv
 
 # TODO: change last_comparison to take in a weave call object
@@ -52,7 +52,7 @@ class ExtractJobOffer:
         job_offer = extract_text_from_pdf(state["offer_pdf"])
         model = ChatOpenAI(model=self.extraction_model)
         job_offer_extract = model.invoke(extract_offer_prompt.format(job_offer=job_offer))
-        state["job_offer_extract"] = job_offer_extract
+        state["job_offer_extract"] = job_offer_extract.content
         return state
     
 class ExtractApplication:
@@ -65,7 +65,7 @@ class ExtractApplication:
         application = extract_text_from_pdf(state["application_pdf"])
         model = ChatOpenAI(model=self.extraction_model)
         application_extract = model.invoke(extract_application_prompt.format(application=application))
-        state["application_extract"] = application_extract
+        state["application_extract"] = application_extract.content
         return state
 
 class CompareApplicationOffer:
@@ -78,14 +78,6 @@ class CompareApplicationOffer:
         state["tries"] = 1 if not state.get("tries") else state.get("tries")+1
         application_extract = state["application_extract"]
         job_offer_extract = state["job_offer_extract"]
-        # model = ChatBedrock(
-        #     model_id=self.comparison_model,
-        #     model_kwargs=dict(temperature=0),
-        #     region_name="us-west-2",
-        #     aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"], 
-        #     aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"], 
-        #     aws_session_token=os.environ["AWS_SESSION_TOKEN"],
-        # ).with_structured_output(InterviewDecision)
         model = ChatOpenAI(
             model=self.comparison_model,
             response_format={"type": "json"}).with_structured_output(InterviewDecision)
@@ -105,83 +97,46 @@ class HallucinationGuardrail:
     @weave.op(name="HallucinationGuardrail")
     def __call__(self, state: GraphState):
         """Use guardrail to check whether reason only contains info from application or offer"""
-        reason = state["reason"]
         application_extract = state["application_extract"]
         job_offer_extract = state["job_offer_extract"]
         hallucination_scorer = HallucinationFreeScorer(
             client=OpenAI(),
             model_id=self.guardrail_model,
         )
+        decision_reason = "Decision: We should move on with an interview\n" if state["decision"] else "Decision: We should NOT move on with an interview\n"
+        decision_reason += f"Reason: {state['reason']}"
         context_document = context_prompt.format(
             job_offer_extract=job_offer_extract,
             application_extract=application_extract
         )
-        guardrail_result = hallucination_scorer.score(output=reason, context=context_document)
+        guardrail_result = hallucination_scorer.score(output=decision_reason, context=context_document)
+
+        # TODO: I could define a column map in the scorer to map the decision.reason to the "output" (not sure because it's only meant for dataset right)?
+        #       Still how do I get in the context_documents? I would need to retrieve them from the beginning of the whole trace? 
+        #       We need some mapping for the call object? Also what's the benefit of applying the score instead of calling .score? (the extra field in the UI?)
+        # guardrail_result = state["last_comparison"].apply_scorer(hallucination_scorer)
+
         state["has_hallucination"] = guardrail_result["has_hallucination"]
         return state
-
-@weave.op
-def extract_application(extraction_model: str, state: GraphState):
-    """Extract the information from the application """
-    application = extract_text_from_pdf(state["application_pdf"])
-    model = ChatOpenAI(model=extraction_model)
-    application_extract = model.invoke(extract_application_prompt.format(application=application))
-    state["application_extract"] = application_extract
-    return state
-
-
-@weave.op
-def compare_application_offer(comparison_model: str, state: GraphState):
-    """Compare the application and offer and decide if they are fitting and why. """
-    application_extract = state["application_extract"]
-    job_offer_extract = state["job_offer_extract"]
-    model = ChatOpenAI(
-        model=comparison_model,
-        response_format={"type": "json"}).with_structured_output(InterviewDecision)
-    comparison_document = compare_offer_application_prompt.format(job_offer_extract=job_offer_extract, application_extract=application_extract)
-    decision = model.invoke(comparison_document)
-    state["reason"] = decision.reason
-    state["decision"] = decision.decision
-    state["last_comparison"] = weave.get_current_call()
-    return state
-
-@weave.op
-def hallucination_guardrail(guardrail_model: str, state: GraphState):
-    """Use guardrail to check whether reason only contains info from application or offer"""
-    reason = state["reason"]
-    application_extract = state["application_extract"]
-    job_offer_extract = state["job_offer_extract"]
-    hallucination_scorer = HallucinationFreeScorer(
-        client=OpenAI(),
-        model_id=guardrail_model,
-    )
-    context_document = context_prompt.format(job_offer_extract=job_offer_extract,application_extract=application_extract)
-    guardrail_result = hallucination_scorer.score(output=reason, context=context_document)
-
-    # TODO: I could define a column map in the scorer to map the decision.reason to the "output" (not sure because it's only meant for dataset right)?
-    #       Still how do I get in the context_documents? I would need to retrieve them from the beginning of the whole trace? 
-    #       We need some mapping for the call object? Also what's the benefit of applying the score instead of calling .score? (the extra field in the UI?)
-    # guardrail_result = state["last_comparison"].apply_scorer(hallucination_scorer)
-
-    state["has_hallucination"] = guardrail_result["has_hallucination"]
-    return state
 
 @weave.op
 def expert_review(state: GraphState):
     """Mark call as needing expert review using the "hitl" tag and wait for expert to provide decision and reason."""
     # Display expert review panel in streamlit
     st.header("Expert Review Required")
-    
-    st.markdown("### Decision Context")
     col1, col2 = st.columns(2)
     
     with col1:
+        st.markdown('<div style="background-color: #f0f8ff; padding: 10px; border-radius: 5px;">', unsafe_allow_html=True)
         st.subheader("Job Offer Details")
         st.write(state["job_offer_extract"])
+        st.markdown('</div>', unsafe_allow_html=True)
         
     with col2:
+        st.markdown('<div style="background-color: #fff0f5; padding: 10px; border-radius: 5px;">', unsafe_allow_html=True)
         st.subheader("Application Details") 
         st.write(state["application_extract"])
+        st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown("### Current Model Output")
     st.subheader("Decision")
@@ -193,16 +148,18 @@ def expert_review(state: GraphState):
     with st.form("expert_review_form"):
         st.markdown("### Expert Override")
         corrected_reason = st.text_area("Corrected Reasoning", value=state["reason"])
-        corrected_decision = st.selectbox("Final Decision", ["INTERVIEW", "NO_INTERVIEW"])
-        
+        corrected_decision = st.selectbox("Final Decision", ["INTERVIEW", "NO_INTERVIEW"], index=0 if state["decision"] else 1)
         submitted = st.form_submit_button("Submit Expert Decision")
+
+        st.write("reason", corrected_reason, "decision", corrected_decision)
+        state["decision"] = corrected_decision == "INTERVIEW"
+        state["reason"] = corrected_reason
+        
         if submitted:
-            state["decision"] = corrected_decision == "INTERVIEW"
-            state["reason"] = corrected_reason
+            print(corrected_reason)
             st.success("Expert decision recorded successfully!")
             
     return state
-
 
 @weave.op
 def validate(state: GraphState) -> str:
@@ -232,7 +189,8 @@ def validate(state: GraphState) -> str:
 def create_wf(
         extraction_model: str,
         comparison_model: str,
-        guardrail_model: str):
+        guardrail_model: str,
+        hitl_always_on: bool):
     # Define the nodes in the workflow
     # Initialize the workflow
     workflow = StateGraph(GraphState)
@@ -247,22 +205,25 @@ def create_wf(
     workflow.add_edge("extract_job_offer", "extract_application")
     workflow.add_edge("extract_application", "compare_application_offer")
     workflow.add_edge("compare_application_offer", "hallucination_guardrail")
-    workflow.add_conditional_edges(
-        "hallucination_guardrail",
-        validate,
-        {
-            "retry": "compare_application_offer",
-            "hitl": "expert_review",
-            "valid": END,
-        },
-    )
+    if hitl_always_on:
+        workflow.add_edge("hallucination_guardrail", "expert_review")
+    else:
+        workflow.add_conditional_edges(
+            "hallucination_guardrail",
+            validate,
+            {
+                "retry": "compare_application_offer",
+                "hitl": "expert_review",
+                "valid": END,
+            },
+        )
     workflow.add_edge("expert_review", END)
 
     # Compile the workflow
     app = workflow.compile()
     return app
 
-# Function to visualize the workflow graph
+# TODO: function to visualize the workflow graph
 def create_wf_graph(app):
     try:
         # Generate the graph as a PNG file
@@ -302,11 +263,17 @@ class HiringAgent(weave.Model):
     extraction_model: str
     comparison_model: str
     guardrail_model: str
+    hitl_always_on: bool = False
     _app : Any = PrivateAttr()
 
     # Start streaming the graph updates using job_offer and cv as inputs
     def model_post_init(self, __context):
-        self._app = create_wf(extraction_model, comparison_model, guardrail_model) 
+        self._app = create_wf(
+            self.extraction_model, 
+            self.comparison_model, 
+            self.guardrail_model, 
+            self.hitl_always_on
+        ) 
 
     @weave.op
     def predict(self, offer_pdf: str, application_pdf: str,
@@ -324,15 +291,15 @@ if __name__ == "__main__":
 
     st.title("Hiring Assistant")
     # Create and patch the Bedrock client
-    client = boto3.client(
-        service_name="bedrock-runtime",
-        region_name="us-west-2",
-        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-        aws_session_token=os.environ["AWS_SESSION_TOKEN"],
-    )
+    # client = boto3.client(
+    #     service_name="bedrock-runtime",
+    #     region_name="us-west-2",
+    #     aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+    #     aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+    #     aws_session_token=os.environ["AWS_SESSION_TOKEN"],
+    # )
     # patching step for Weave
-    patch_client(client)
+    # patch_client(client)
 
     # Sidebar for mode selection and model configuration
     with st.sidebar:
@@ -343,7 +310,8 @@ if __name__ == "__main__":
         extraction_model = st.selectbox("Extraction Model", ["gpt-4o-mini", "gpt-4o"])
         comparison_model = st.selectbox("Comparison Model", ["anthropic.claude-3-sonnet-20240229-v1:0", "us.amazon.nova-lite-v1:0", "gpt-4o-mini", "gpt-4o"]) 
         guardrail_model = st.selectbox("Guardrail Model", ["gpt-4o-mini", "smollm2-135m-v18"])
-        use_guardrail = st.checkbox("Use Guardrail", value=True)
+        use_guardrail = st.toggle("Use Guardrail", value=True)
+        hitl_always_on = st.toggle("Always Use Expert Review", value=False)
 
         st.subheader("Evaluation Settings")
         judge_model = st.selectbox("Judge Model", ["gpt-4o-mini", "gpt-4o"])
@@ -352,7 +320,8 @@ if __name__ == "__main__":
     hiring_agent = HiringAgent(
         extraction_model=extraction_model,
         comparison_model=comparison_model,
-        guardrail_model=guardrail_model
+        guardrail_model=guardrail_model,
+        hitl_always_on=hitl_always_on
     )
 
     if mode == "Single Test":
@@ -405,8 +374,7 @@ if __name__ == "__main__":
         st.header("Batch Evaluation")
         dataset_ref = st.text_input(
             "Dataset Reference", 
-            "weave:///hhuml/demo-hiring-agent/object/evaluation_dataset:X4X7nNTPMllcxJ7JqW2KXJYggAXw7GMjoXQNzoqJwKs"
-            #"weave:///wandb-smle/yyyy-hiring-assistant/object/evaluation_dataset:UOy8Zr7MYEOYJgoixA69tNi4ViuMKEjoTvYfTu1lz6U"
+            "weave:///wandb-smle/e2e-hiring-assistant/object/evaluation_dataset:9nXWyt0NHI32sKBBvbsigEXvfeYox5AGks2YJ8KCJYU",
         )
         trials = st.number_input("Number of Trials", min_value=1, value=1)
         
@@ -416,9 +384,9 @@ if __name__ == "__main__":
                     dataset=weave.ref(dataset_ref).get(),
                     scorers=[decision_match, ReasonScorer(model_id=judge_model)],
                     preprocess_model_input=lambda row: {
-                        "offer_pdf": row["offer_pdf"],
+                        "offer_pdf": str(row["offer_pdf"]),
                         "offer_text": row["offer_text"],
-                        "application_pdf": row["application_pdf"],
+                        "application_pdf": str(row["application_pdf"]),
                         "application_text": row["application_text"],
                         "interview": row["interview"],
                         "reason": row["reason"],
