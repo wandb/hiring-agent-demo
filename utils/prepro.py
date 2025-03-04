@@ -2,7 +2,7 @@ import os
 import weave
 import fitz  # PyMuPDF
 from PIL import Image
-from typing import Union
+from typing import Union, Any
 
 @weave.op
 def pdf_to_images(pdf_path: str, single_img: bool = True) -> Union[list[Image.Image], Image.Image]:
@@ -111,6 +111,19 @@ def save_as_pdf(content, filename):
     # Save the PDF document
     pdf_document.save(filename)
     pdf_document.close()
+
+@weave.op
+def pre_process_eval(row: Any):
+    return {
+        "offer_pdf": str(row["offer_pdf"]),
+        "offer_text": row["offer_text"],
+        "application_pdf": str(row["application_pdf"]),
+        "application_text": row["application_text"],
+        "interview": row["interview"],
+        "reason": row["reason"],
+        "offer_images": pdf_to_images(str(row["offer_pdf"])),
+        "application_images": pdf_to_images(str(row["application_pdf"])),
+    }
 
 if __name__ == "__main__":
     # Example usage
