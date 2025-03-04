@@ -5,6 +5,7 @@ langchain-core
 langchain-ollama
 langchain-openai
 langchain-aws
+langchain-huggingface
 litserve
 numpy
 openai
