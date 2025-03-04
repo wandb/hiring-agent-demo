@@ -191,6 +191,9 @@ Job Offer Details:
 
 Candidate Application:
 {application_extract}
+
+# Answer
+Here is the JSON response: ```json
 """
 
 class InterviewDecision(BaseModel):
@@ -240,24 +243,8 @@ class ReasonComparison(BaseModel):
 
 # for generate.py
 app_gen_prompt_pos = """ Job Offer Details: {job_offer} 
-applicant_profile = 
-    "name": "John",
-    "surname": "Doe",
-    "address": 
-        "street": "123 Main Street",
-        "apartment": "Apartment 4B",
-        "city": "Springfield",
-        "state": "IL",
-        "zip_code": "62704",
-        "country": "USA"
-    ,
-    "date_of_birth": "1990-01-15",
-    "age": 35,
-    "phone_number": "+1 (555) 123-4567",
-    "email": "john.doe@example.com",
-    "nationality": "American",
-    "linkedin_profile": "https://linkedin.com/in/johndoe",
-    "marital_status": "Single"
+
+{applicant_context}
 
 # Role
 You are an assistant tasked with creating a tailored job application, including a CV and a cover letter, based on the details provided in a job offer. The goal is to highlight qualifications, experience, and skills that align closely with the job's requirements.
@@ -302,24 +289,7 @@ Ensure the tone is professional and tailored to the job offer. Make the applicat
 app_gen_prompt_neg = """ 
 Job Offer Details: {job_offer}
 
-applicant_profile = 
-    "name": "John",
-    "surname": "Doe",
-    "address": 
-        "street": "123 Main Street",
-        "apartment": "Apartment 4B",
-        "city": "Springfield",
-        "state": "IL",
-        "zip_code": "62704",
-        "country": "USA"
-    ,
-    "date_of_birth": "1990-01-15",
-    "age": 35,
-    "phone_number": "+1 (555) 123-4567",
-    "email": "john.doe@example.com",
-    "nationality": "American",
-    "linkedin_profile": "https://linkedin.com/in/johndoe",
-    "marital_status": "Single"
+{applicant_context}
     
 # Role
 You are an assistant tasked with creating a tailored job application, including a CV and a cover letter, based on the details provided in a job offer. However, the goal here is to create a job application that does *not* align with the job's requirements, qualifications, and experience. The applicant should lack the skills, qualifications, and experience needed for the role.
@@ -330,7 +300,7 @@ Using the job offer as a guide, draft a complete job application that includes t
 1. **Cover Letter**:
    - Address the letter to the hiring manager or company (use a generic salutation if no specific name is provided).
    - Start with a generic and non-compelling introduction explaining the interest in the role, but ensure it doesn't align with the job's specifics.
-   - Highlight irrelevant skills, qualifications, and achievements that don't match the job description. Include experiences or projects that are unrelated or do not demonstrate the applicant’s ability to excel in the role.
+   - Highlight irrelevant skills, qualifications, and achievements that don't match the job description. Include experiences or projects that are unrelated or do not demonstrate the applicant's ability to excel in the role.
    - Avoid mentioning any qualifications that are important for the role.
    - Conclude with a vague or overly general closing statement, avoiding enthusiasm for the interview or a clear expression of interest in contributing to the company.
 
@@ -352,7 +322,7 @@ Provide the application in a structured format:
 1. Cover Letter:
    - Include the salutation, body paragraphs, and a closing statement. Avoid addressing any of the key skills or qualifications required for the role.
 2. CV:
-   - Professional summary that does not reflect the job’s needs.
+   - Professional summary that does not reflect the job's needs.
    - Work experience (listed with job title, company, dates, and bullet points for non-relevant or minimal achievements).
    - Education (degrees, institutions, and graduation dates that are unrelated or irrelevant to the job).
    - Skills (grouped by irrelevant or missing categories).
