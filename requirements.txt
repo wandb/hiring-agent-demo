@@ -6,6 +6,7 @@ langchain-ollama
 langchain-openai
 langchain-aws
 langchain-huggingface
+accelerate
 litserve
 numpy
 openai

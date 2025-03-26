@@ -106,16 +106,83 @@ class CompareApplicationOffer:
         state["tries"] = 1 if not state.get("tries") else state.get("tries")+1
         application_extract = state["application_extract"]
         job_offer_extract = state["job_offer_extract"]
+        
         if self.comparison_model in openai_models:
             model = ChatOpenAI(
                 model=self.comparison_model,
                 response_format={"type": "json"}).with_structured_output(InterviewDecision)
+        elif self.comparison_model.startswith("wandb-artifact:///"):
+            # Use Ollama for local model inference
+            from langchain_ollama import ChatOllama
+            
+            # Extract model name from the artifact path
+            artifact_name = self.comparison_model.split("/")[-1]
+            model_name = artifact_name.split(":")[0]
+            
+            # Initialize ChatOllama with the model
+            model = ChatOllama(
+                model="unsloth_model:latest",#"llama3.2:latest",
+                format="json"
+            ).with_structured_output(InterviewDecision)
+
+            # Extract artifact path from the model name (format: "wandb-artifact:///entity/project/artifact:version")
+            # artifact_path = self.comparison_model.split("wandb-artifact:///")[1]  # Remove "wandb-artifact:///" prefix
+            
+            # # Initialize W&B run to download the artifact
+            # run = wandb.init(project="e2e-hiring-assistant", entity="wandb-smle", job_type="model-inference")
+            
+            # # Download the model artifact
+            # artifact = run.use_artifact(artifact_path)
+            # model_dir = artifact.download()
+            
+            # # Load the model using Hugging Face's transformers
+            # from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+            # import torch
+            
+            # tokenizer = AutoTokenizer.from_pretrained(model_dir)
+            
+            # # Check if MPS is available on Mac
+            # if torch.backends.mps.is_available():
+            #     device = "mps"
+            #     device_map = "mps"
+            # else:
+            #     device = "cpu"
+            #     device_map = "cpu"
+                
+            # # Load model for Mac (MPS) or CPU without bitsandbytes
+            # hf_model = AutoModelForCausalLM.from_pretrained(
+            #     model_dir,
+            #     device_map=device_map,
+            #     torch_dtype=torch.float16 if device == "mps" else torch.float32,
+            #     low_cpu_mem_usage=True
+            # )
+            
+            # # Create a pipeline for text generation
+            # generator = pipeline(
+            #     "text-generation", 
+            #     model=hf_model, 
+            #     tokenizer=tokenizer,
+            #     device=device
+            # )
+            
+            # # Create a custom LangChain model wrapper for the HF model
+            # from langchain.llms.huggingface import HuggingFacePipeline
+            # from langchain.prompts import PromptTemplate
+            
+            # llm = HuggingFacePipeline(pipeline=generator)
+            
+            # # Create a structured output wrapper
+            # model = llm.with_structured_output(InterviewDecision)
+            
+            # # Finish the W&B run
+            # wandb.finish()
         else:
             model = ChatBedrock(
                 model=self.comparison_model,
                 aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
                 aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
                 aws_session_token=os.environ["AWS_SESSION_TOKEN"]).with_structured_output(InterviewDecision)
+            
         latest_comparison_prompt = weave.ref("weave:///wandb-smle/e2e-hiring-assistant/object/compare_offer_application_prompt:latest").get()
         comparison_document = latest_comparison_prompt.format(
             job_offer_extract=job_offer_extract, 
@@ -270,6 +337,9 @@ def stream_graph_updates(app, offer_pdf: str, application_pdf: str):
     if "thread_config" not in st.session_state:
         st.session_state.thread_config = {"configurable": {"thread_id": uuid.uuid4()}}
 
+    if 'interrupt' not in st.session_state:
+        st.session_state.interrupt = False
+
     # If no existing session should be resumed start a new event loop otherwise resume existing one
     if not st.session_state.interrupt: 
         for event in app.stream({"offer_pdf": offer_pdf, "application_pdf": application_pdf}, config=st.session_state.thread_config):
@@ -396,21 +466,19 @@ if __name__ == "__main__":
     # patching step for Weave
     patch_client(client)
 
-    # set new prompts
-    prompts = [context_prompt, guardrail_prompt, extract_offer_prompt, extract_application_prompt, compare_offer_application_prompt]
-    prompt_names = ["context_prompt", "guardrail_prompt", "extract_offer_prompt", "extract_application_prompt", "compare_offer_application_prompt"]
-    for prompt, prompt_name in zip(prompts, prompt_names):
-        weave_prompt = weave.StringPrompt(prompt)
-        weave.publish(weave_prompt, name=prompt_name)
-
     # Sidebar for mode selection and model configuration
     with st.sidebar:
         st.header("Configuration")
-        mode = st.selectbox("Select Mode", ["Single Test", "Batch Testing", "Create Dataset"])
+        mode = st.selectbox("Select Mode", ["Single Test", "Batch Testing", "Create Dataset", "Manage Prompts"])
         
         st.subheader("Model Settings")
         extraction_model = st.selectbox("Extraction Model", openai_models)
-        comparison_model = st.selectbox("Comparison Model", openai_models+["us.anthropic.claude-3-5-sonnet-20241022-v2:0", "us.amazon.nova-lite-v1:0"]) 
+        comparison_model = st.selectbox(
+            "Comparison Model", 
+            openai_models+[
+                "us.anthropic.claude-3-5-sonnet-20241022-v2:0", 
+                "us.amazon.nova-lite-v1:0",
+                "wandb-artifact:///wandb-smle/e2e-hiring-agent/fine-tuned-comparison_model:v2"]) 
         guardrail_model = st.selectbox("Guardrail Model", openai_models+["smollm2-135m-v18"])
         use_guardrail = st.toggle("Use Guardrail", value=True)
         hitl_always_on = st.toggle("Always Use Expert Review", value=False)
@@ -426,7 +494,87 @@ if __name__ == "__main__":
         hitl_always_on=hitl_always_on
     )
 
-    if mode == "Single Test":
+    if mode == "Manage Prompts":
+        st.header("Prompt Management")
+        
+        # Define prompts and their descriptions
+        prompts = {
+            "context_prompt": {
+                "name": "Context Prompt",
+                "description": "Provides context for the job offer and application comparison",
+                "content": context_prompt
+            },
+            "guardrail_prompt": {
+                "name": "Guardrail Prompt",
+                "description": "Ensures the model's reasoning is based on provided information",
+                "content": guardrail_prompt
+            },
+            "extract_offer_prompt": {
+                "name": "Extract Offer Prompt",
+                "description": "Extracts structured information from job offers",
+                "content": extract_offer_prompt
+            },
+            "extract_application_prompt": {
+                "name": "Extract Application Prompt",
+                "description": "Extracts structured information from applications",
+                "content": extract_application_prompt
+            },
+            "compare_offer_application_prompt": {
+                "name": "Compare Offer Application Prompt",
+                "description": "Compares job offers and applications to make hiring decisions",
+                "content": compare_offer_application_prompt
+            }
+        }
+        
+        # Create tabs for each prompt
+        tabs = st.tabs(list(prompts.keys()))
+        
+        for tab, (prompt_id, prompt_info) in zip(tabs, prompts.items()):
+            with tab:
+                st.subheader(prompt_info["name"])
+                st.write(prompt_info["description"])
+                
+                # Get latest version of the prompt
+                try:
+                    latest_prompt = weave.ref(f"weave:///wandb-smle/e2e-hiring-assistant/object/{prompt_id}:latest").get()
+                    current_content = latest_prompt.content if hasattr(latest_prompt, 'content') else latest_prompt
+                except Exception:
+                    current_content = prompt_info["content"]
+                
+                # Create text area for editing
+                edited_content = st.text_area(
+                    "Edit Prompt",
+                    value=current_content,
+                    height=400,
+                    key=f"edit_{prompt_id}"
+                )
+                
+                # Add publish button
+                if st.button(f"Publish {prompt_info['name']}", key=f"publish_{prompt_id}"):
+                    try:
+                        # Only publish if content has changed
+                        if edited_content != current_content:
+                            weave_prompt = weave.StringPrompt(edited_content)
+                            weave.publish(weave_prompt, name=prompt_id)
+                            st.success(f"Successfully published new version of {prompt_info['name']}")
+                        else:
+                            st.info("No changes detected. Prompt not published.")
+                    except Exception as e:
+                        st.error(f"Error publishing prompt: {str(e)}")
+                
+                # Show version history
+                st.subheader("Version History")
+                try:
+                    versions = weave.ref(f"weave:///wandb-smle/e2e-hiring-assistant/object/{prompt_id}").versions()
+                    for version in versions:
+                        version_content = version.get().content if hasattr(version.get(), 'content') else version.get()
+                        st.text(f"Version: {version.digest[:8]} - {version.created_at}")
+                        with st.expander("View Content"):
+                            st.text(version_content)
+                except Exception:
+                    st.info("No version history available")
+
+    elif mode == "Single Test":
         st.header("Upload Documents")
         col1, col2 = st.columns(2)
         
@@ -488,7 +636,8 @@ if __name__ == "__main__":
         st.header("Batch Evaluation")
         dataset_ref = st.text_input(
             "Dataset Reference", 
-            "weave:///wandb-smle/e2e-hiring-assistant/object/evaluation_dataset:9nXWyt0NHI32sKBBvbsigEXvfeYox5AGks2YJ8KCJYU",
+            "weave:///wandb-smle/e2e-hiring-assistant/object/evaluation_dataset:rERmeHPF4pmNYpTbAayZyFAr3oEzZlhYyVXyhPDI48w",
+            #"weave:///wandb-smle/e2e-hiring-assistant/object/evaluation_dataset:9nXWyt0NHI32sKBBvbsigEXvfeYox5AGks2YJ8KCJYU",
         )
         trials = st.number_input("Number of Trials", min_value=1, value=1)
         
@@ -763,18 +912,19 @@ if __name__ == "__main__":
                             weave_ref.digest,
                         )
                         
-                        # Save dataset as JSON
-                        json_path = "evaluation_dataset.json"
-                        with open(json_path, "w") as f:
-                            json.dump(rows, f)
+                        # Create a wandb.Table from the dataset rows
+                        columns = list(rows[0].keys()) if rows else []
+                        table = wandb.Table(columns=columns)
+                        for row in rows:
+                            table.add_data(*[row[col] for col in columns])
                         
-                        # Create and log artifact
+                        # Create and log artifact with the table
                         artifact = wandb.Artifact(
                             name="evaluation_dataset",
                             type="dataset",
                             description="Generated applications based on characteristics"
                         )
-                        artifact.add_file(json_path)
+                        artifact.add(table, "evaluation_dataset")
                         
                         # Add metadata
                         artifact.metadata = {
@@ -809,41 +959,3 @@ if __name__ == "__main__":
                                 
                                 st.write("**Reason:**")
                                 st.write(example.reason)
-    # else:  # Create Dataset
-    #     st.header("Create Evaluation Dataset")
-    #     num_applications = st.number_input("Number of Applications to Generate", min_value=1, value=1)
-    #     offer_files = st.file_uploader("Upload Offer PDFs", type=['pdf'], accept_multiple_files=True)
-        
-    #     if offer_files and st.button("Generate Dataset"):
-    #         with st.spinner("Generating dataset..."):
-    #             # Create offers directory if it doesn't exist
-    #             os.makedirs("./utils/data/offers", exist_ok=True)
-    #             os.makedirs("./utils/data/applications", exist_ok=True)
-                
-    #             # Save uploaded files to local directory if they don't exist
-    #             offer_paths = []
-    #             for f in offer_files:
-    #                 save_path = f"./utils/data/offers/{f.name}"
-    #                 if not os.path.exists(save_path):
-    #                     with open(save_path, "wb") as file:
-    #                         file.write(f.getvalue())
-    #                 offer_paths.append(save_path)
-                
-    #             dataset_struct = generate_dataset(
-    #                 offer_list=offer_paths,
-    #                 generation_model=extraction_model,
-    #                 num_app=num_applications,
-    #             )
-                
-    #             rows = [example.model_dump() for example in dataset_struct.examples]
-    #             dataset = weave.Dataset(name="evaluation_dataset", rows=rows)
-    #             ref = weave.publish(dataset)
-    #             url = urls.object_version_path(
-    #                 ref.entity,
-    #                 ref.project,
-    #                 ref.name,
-    #                 ref.digest,
-    #             )
-    #             st.success(f"Dataset created and published successfully! [View dataset]({url})")
-
-
