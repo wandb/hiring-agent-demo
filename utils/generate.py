@@ -95,11 +95,11 @@ def generate_applicant_characteristics(num_applicants: int, job_positions: List[
         is_positive = quality_score >= 70  # Threshold for positive example
         
         data.append({
-            "job_position": job_position,
+            "job_position": str(job_position),
             "gender": gender,
             "age": age,
-            "nationality": nationality,
-            "education": education,
+            "nationality": str(nationality),
+            "education": str(education),
             "years_experience": years_experience,
             "quality_score": quality_score,
             "is_positive": is_positive

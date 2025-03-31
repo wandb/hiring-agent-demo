@@ -7,13 +7,14 @@ from weave.trace import urls
 from weave.integrations.bedrock.bedrock_sdk import patch_client
 from langchain_openai import ChatOpenAI
 from langchain_aws import ChatBedrock
+from langchain_ollama import ChatOllama
 from langgraph.graph import END, StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
 from openai import OpenAI
 
 import boto3
-import os, sys, json
+import os, sys, json, subprocess, shutil
 import asyncio, uuid
 from PIL import Image
 from typing import Optional, List, Any, Union
@@ -69,7 +70,7 @@ class GraphState(TypedDict):
     last_comparison: Any
 
 class ExtractJobOffer:
-    def __init__(self, extracttion_model) -> None:
+    def __init__(self, extraction_model) -> None:
         self.extraction_model = extraction_model
 
     @weave.op(name="ExtractJobOfferCall")
@@ -77,7 +78,8 @@ class ExtractJobOffer:
         """Extract the information from the job offer"""
         job_offer = extract_text_from_pdf(state["offer_pdf"])
         model = ChatOpenAI(model=self.extraction_model)
-        latest_offer_prompt = weave.ref("weave:///wandb-smle/e2e-hiring-assistant/object/extract_offer_prompt:latest").get()
+        # Use wandb_entity and wandb_project from global scope
+        latest_offer_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_offer_prompt:latest").get()
         job_offer_extract = model.invoke(latest_offer_prompt.format(job_offer=job_offer))
         state["job_offer_extract"] = job_offer_extract.content
         return state
@@ -91,7 +93,8 @@ class ExtractApplication:
         """Extract the information from the application"""
         application = extract_text_from_pdf(state["application_pdf"])
         model = ChatOpenAI(model=self.extraction_model)
-        latest_application_prompt = weave.ref("weave:///wandb-smle/e2e-hiring-assistant/object/extract_application_prompt:latest").get()
+        # Use wandb_entity and wandb_project from global scope
+        latest_application_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_application_prompt:latest").get()
         application_extract = model.invoke(latest_application_prompt.format(application=application))
         state["application_extract"] = application_extract.content
         return state
@@ -103,6 +106,13 @@ class CompareApplicationOffer:
     @weave.op(name="CompareApplicationOfferCall")
     def __call__(self, state: GraphState):
         """Compare the application and offer and decide if they are fitting and why."""
+        # track inference
+        run = wandb.init(
+            project=st.session_state.wandb_project, 
+            entity=st.session_state.wandb_entity, 
+            job_type="inference"
+        )
+
         state["tries"] = 1 if not state.get("tries") else state.get("tries")+1
         application_extract = state["application_extract"]
         job_offer_extract = state["job_offer_extract"]
@@ -112,70 +122,19 @@ class CompareApplicationOffer:
                 model=self.comparison_model,
                 response_format={"type": "json"}).with_structured_output(InterviewDecision)
         elif self.comparison_model.startswith("wandb-artifact:///"):
-            # Use Ollama for local model inference
-            from langchain_ollama import ChatOllama
-            
             # Extract model name from the artifact path
             artifact_name = self.comparison_model.split("/")[-1]
             model_name = artifact_name.split(":")[0]
-            
-            # Initialize ChatOllama with the model
+
+            # Use artifact without downloaded it for lineage
+            artifact = run.use_artifact(artifact_name)
+
+            # We can assume that model is already downloaded and added to Ollama
+            model_name = "fine-tuned-comparison-model"
             model = ChatOllama(
-                model="unsloth_model:latest",#"llama3.2:latest",
+                model=model_name,
                 format="json"
             ).with_structured_output(InterviewDecision)
-
-            # Extract artifact path from the model name (format: "wandb-artifact:///entity/project/artifact:version")
-            # artifact_path = self.comparison_model.split("wandb-artifact:///")[1]  # Remove "wandb-artifact:///" prefix
-            
-            # # Initialize W&B run to download the artifact
-            # run = wandb.init(project="e2e-hiring-assistant", entity="wandb-smle", job_type="model-inference")
-            
-            # # Download the model artifact
-            # artifact = run.use_artifact(artifact_path)
-            # model_dir = artifact.download()
-            
-            # # Load the model using Hugging Face's transformers
-            # from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-            # import torch
-            
-            # tokenizer = AutoTokenizer.from_pretrained(model_dir)
-            
-            # # Check if MPS is available on Mac
-            # if torch.backends.mps.is_available():
-            #     device = "mps"
-            #     device_map = "mps"
-            # else:
-            #     device = "cpu"
-            #     device_map = "cpu"
-                
-            # # Load model for Mac (MPS) or CPU without bitsandbytes
-            # hf_model = AutoModelForCausalLM.from_pretrained(
-            #     model_dir,
-            #     device_map=device_map,
-            #     torch_dtype=torch.float16 if device == "mps" else torch.float32,
-            #     low_cpu_mem_usage=True
-            # )
-            
-            # # Create a pipeline for text generation
-            # generator = pipeline(
-            #     "text-generation", 
-            #     model=hf_model, 
-            #     tokenizer=tokenizer,
-            #     device=device
-            # )
-            
-            # # Create a custom LangChain model wrapper for the HF model
-            # from langchain.llms.huggingface import HuggingFacePipeline
-            # from langchain.prompts import PromptTemplate
-            
-            # llm = HuggingFacePipeline(pipeline=generator)
-            
-            # # Create a structured output wrapper
-            # model = llm.with_structured_output(InterviewDecision)
-            
-            # # Finish the W&B run
-            # wandb.finish()
         else:
             model = ChatBedrock(
                 model=self.comparison_model,
@@ -183,7 +142,8 @@ class CompareApplicationOffer:
                 aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
                 aws_session_token=os.environ["AWS_SESSION_TOKEN"]).with_structured_output(InterviewDecision)
             
-        latest_comparison_prompt = weave.ref("weave:///wandb-smle/e2e-hiring-assistant/object/compare_offer_application_prompt:latest").get()
+        # Use wandb_entity and wandb_project from global scope
+        latest_comparison_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/compare_offer_application_prompt:latest").get()
         comparison_document = latest_comparison_prompt.format(
             job_offer_extract=job_offer_extract, 
             application_extract=application_extract
@@ -191,6 +151,15 @@ class CompareApplicationOffer:
         decision = model.invoke(comparison_document)
         state["reason"] = decision.reason
         state["decision"] = decision.decision
+
+        run.log({
+            "decision": decision.decision,
+            "reason": decision.reason,
+            "job_offer_extract": job_offer_extract,
+            "application_extract": application_extract,
+            "comparison_document": comparison_document
+        })
+        run.finish()
         return state
 
 class HallucinationGuardrail:
@@ -275,11 +244,12 @@ def create_wf(
         extraction_model: str,
         comparison_model: str,
         guardrail_model: str,
-        hitl_always_on: bool):
+        hitl_always_on: bool,
+        disable_expert_review: bool = False):
     # Define the nodes in the workflow
     # Initialize the workflow
     workflow = StateGraph(GraphState)
-    workflow.add_node("extract_job_offer", ExtractJobOffer(extracttion_model=extraction_model))
+    workflow.add_node("extract_job_offer", ExtractJobOffer(extraction_model=extraction_model))
     workflow.add_node("extract_application", ExtractApplication(extraction_model=extraction_model))
     workflow.add_node("compare_application_offer", CompareApplicationOffer(comparison_model=comparison_model))
     workflow.add_node("hallucination_guardrail", HallucinationGuardrail(guardrail_model=guardrail_model))
@@ -290,9 +260,17 @@ def create_wf(
     workflow.add_edge("extract_job_offer", "extract_application")
     workflow.add_edge("extract_application", "compare_application_offer")
     workflow.add_edge("compare_application_offer", "hallucination_guardrail")
-    if hitl_always_on:
+    
+    # Configure the flow based on expert review settings
+    if disable_expert_review:
+        # Never use expert review, even for hallucinations
+        workflow.add_edge("hallucination_guardrail", END)
+    elif hitl_always_on:
+        # Always use expert review
         workflow.add_edge("hallucination_guardrail", "expert_review")
+        workflow.add_edge("expert_review", END)
     else:
+        # Only use expert review when needed (default behavior)
         workflow.add_conditional_edges(
             "hallucination_guardrail",
             validate,
@@ -302,7 +280,7 @@ def create_wf(
                 "valid": END,
             },
         )
-    workflow.add_edge("expert_review", END)
+        workflow.add_edge("expert_review", END)
 
     # A checkpointer is required for `interrupt` to work.
     checkpointer = MemorySaver()
@@ -393,6 +371,7 @@ class HiringAgent(weave.Model):
     comparison_model: str
     guardrail_model: str
     hitl_always_on: bool = False
+    disable_expert_review: bool = False
     _app : Any = PrivateAttr()
 
     # Start streaming the graph updates using job_offer and cv as inputs
@@ -401,7 +380,8 @@ class HiringAgent(weave.Model):
             self.extraction_model, 
             self.comparison_model, 
             self.guardrail_model, 
-            self.hitl_always_on
+            self.hitl_always_on,
+            self.disable_expert_review
         ) 
 
     @weave.op
@@ -447,29 +427,42 @@ def streamlit_expert_panel():
         st.session_state.corrected_reason = corrected_reason
         st.session_state.corrected_decision = corrected_decision
         st.success("Expert decision recorded successfully!")
-
 if __name__ == "__main__":
     # Setup
     load_dotenv("utils/.env")
     st.set_page_config(page_title="Hiring Assistant", layout="wide")
     st.title("Hiring Assistant")
-    client = weave.init("wandb-smle/e2e-hiring-assistant")
-
-    # Create and patch the Bedrock client
-    client = boto3.client(
-        service_name="bedrock-runtime",
-        region_name="us-west-2",
-        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-        aws_session_token=os.environ["AWS_SESSION_TOKEN"],
-    )
-    # patching step for Weave
-    patch_client(client)
-
+    
     # Sidebar for mode selection and model configuration
     with st.sidebar:
         st.header("Configuration")
-        mode = st.selectbox("Select Mode", ["Single Test", "Batch Testing", "Create Dataset", "Manage Prompts"])
+        
+        # Add W&B configuration section
+        st.subheader("W&B Configuration")
+        # Default entity and project from environment variables or hardcoded defaults
+        default_entity = os.environ.get("WANDB_ENTITY", "wandb-smle")
+        default_project = os.environ.get("WANDB_PROJECT", "e2e-hiring-assistant")
+
+        wandb_entity = st.text_input("W&B Entity", value=default_entity, help="Your W&B entity/username")
+        wandb_project = st.text_input("W&B Project", value=default_project, help="Your W&B project name")
+        
+        # Save to session state
+        st.session_state.wandb_entity = wandb_entity
+        st.session_state.wandb_project = wandb_project
+        
+        # Initialize Weave client with the provided entity and project
+        client = weave.init(f"{wandb_entity}/{wandb_project}")
+        boto_client = boto3.client(
+            service_name="bedrock-runtime",
+            region_name="us-west-2",
+            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+            aws_session_token=os.environ["AWS_SESSION_TOKEN"],
+        )
+        # patching step for Weave
+        patch_client(boto_client)
+        
+        mode = st.selectbox("Select Mode", ["Create Dataset", "Manage Prompts", "Single Test", "Batch Testing"])
         
         st.subheader("Model Settings")
         extraction_model = st.selectbox("Extraction Model", openai_models)
@@ -477,11 +470,83 @@ if __name__ == "__main__":
             "Comparison Model", 
             openai_models+[
                 "us.anthropic.claude-3-5-sonnet-20241022-v2:0", 
-                "us.amazon.nova-lite-v1:0",
-                "wandb-artifact:///wandb-smle/e2e-hiring-agent/fine-tuned-comparison_model:v2"]) 
+                "us.amazon.nova-lite-v1:0"
+            ]
+        ) 
+        
+        # Add optional input field for custom artifact path
+        custom_artifact = st.text_input(
+            "Custom W&B Artifact Path (optional)", 
+            value="wandb-smle/e2e-hiring-assistant-test/fine-tuned-comparison-model:latest",
+            help="Enter a W&B artifact path. Note: 'wandb-artifact:///' will be automatically added as prefix."
+        )
+        
+        # Add button to add new models
+        add_model = st.button("+ Add Model to Ollama")
+        
+        # If custom artifact is provided, use it instead
+        if custom_artifact:
+            comparison_model = "wandb-artifact:///" + custom_artifact
+            
+            # Only check for Ollama if using a W&B artifact and the add button is clicked
+            if add_model:
+                # Extract model name from the artifact path
+                artifact_name = comparison_model.split("/")[-1]
+                model_name = artifact_name.split(":")[0]
+                
+                # Create local_models directory if it doesn't exist
+                local_models_dir = "local_models"
+                os.makedirs(local_models_dir, exist_ok=True)
+                
+                # Check if the model already exists in Ollama
+                try:
+                    result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True)
+                    if model_name in result.stdout:
+                        print(f"Using existing Ollama model: {model_name}")
+                    else:
+                        print(f"Model {model_name} not found in Ollama, downloading from W&B...")
+                        # Download the artifact from W&B
+                        model_dir = os.path.join(local_models_dir, model_name)
+                        os.makedirs(model_dir, exist_ok=True)
+                        
+                        # Extract artifact reference from the path
+                        artifact_ref = comparison_model.replace("wandb-artifact:///", "")
+                        
+                        # Download the artifact
+                        artifact = wandb.Api().artifact(artifact_ref)
+                        artifact_dir = artifact.download(root=model_dir)
+                        
+                        # Check if Modelfile exists in the artifact
+                        modelfile_path = os.path.join(artifact_dir, "Modelfile")
+                        if not os.path.exists(modelfile_path):
+                            # If no Modelfile, create one pointing to the root of the artifact folder
+                            with open(modelfile_path, "w") as f:
+                                f.write(f"FROM {artifact_dir}\n")
+                        
+                        # Create the Ollama model
+                        subprocess.run(
+                            ["ollama", "create", model_name, "-f", modelfile_path],
+                            check=True
+                        )
+                        print(f"Created Ollama model: {model_name}")
+                except Exception as e:
+                    print(f"Error setting up Ollama model: {e}")
+                    raise
+        
         guardrail_model = st.selectbox("Guardrail Model", openai_models+["smollm2-135m-v18"])
         use_guardrail = st.toggle("Use Guardrail", value=True)
-        hitl_always_on = st.toggle("Always Use Expert Review", value=False)
+        
+        # Expert review settings
+        st.subheader("Expert Review Settings")
+        expert_review_options = st.radio(
+            "Expert Review Mode",
+            ["Default (when needed)", "Always On", "Disabled (never)"],
+            help="Control when expert review is triggered"
+        )
+        
+        # Map the radio selection to the parameters
+        hitl_always_on = expert_review_options == "Always On"
+        disable_expert_review = expert_review_options == "Disabled (never)"
 
         st.subheader("Evaluation Settings")
         judge_model = st.selectbox("Judge Model", ["gpt-4o-mini", "gpt-4o"])
@@ -491,7 +556,8 @@ if __name__ == "__main__":
         extraction_model=extraction_model,
         comparison_model=comparison_model,
         guardrail_model=guardrail_model,
-        hitl_always_on=hitl_always_on
+        hitl_always_on=hitl_always_on,
+        disable_expert_review=disable_expert_review
     )
 
     if mode == "Manage Prompts":
@@ -536,7 +602,7 @@ if __name__ == "__main__":
                 
                 # Get latest version of the prompt
                 try:
-                    latest_prompt = weave.ref(f"weave:///wandb-smle/e2e-hiring-assistant/object/{prompt_id}:latest").get()
+                    latest_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/{prompt_id}:latest").get()
                     current_content = latest_prompt.content if hasattr(latest_prompt, 'content') else latest_prompt
                 except Exception:
                     current_content = prompt_info["content"]
@@ -552,20 +618,17 @@ if __name__ == "__main__":
                 # Add publish button
                 if st.button(f"Publish {prompt_info['name']}", key=f"publish_{prompt_id}"):
                     try:
-                        # Only publish if content has changed
-                        if edited_content != current_content:
-                            weave_prompt = weave.StringPrompt(edited_content)
-                            weave.publish(weave_prompt, name=prompt_id)
-                            st.success(f"Successfully published new version of {prompt_info['name']}")
-                        else:
-                            st.info("No changes detected. Prompt not published.")
+                        # Always publish when button is clicked
+                        weave_prompt = weave.StringPrompt(edited_content)
+                        weave.publish(weave_prompt, name=prompt_id)
+                        st.success(f"Successfully published new version of {prompt_info['name']}")
                     except Exception as e:
                         st.error(f"Error publishing prompt: {str(e)}")
                 
                 # Show version history
                 st.subheader("Version History")
                 try:
-                    versions = weave.ref(f"weave:///wandb-smle/e2e-hiring-assistant/object/{prompt_id}").versions()
+                    versions = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/{prompt_id}").versions()
                     for version in versions:
                         version_content = version.get().content if hasattr(version.get(), 'content') else version.get()
                         st.text(f"Version: {version.digest[:8]} - {version.created_at}")
@@ -636,8 +699,7 @@ if __name__ == "__main__":
         st.header("Batch Evaluation")
         dataset_ref = st.text_input(
             "Dataset Reference", 
-            "weave:///wandb-smle/e2e-hiring-assistant/object/evaluation_dataset:rERmeHPF4pmNYpTbAayZyFAr3oEzZlhYyVXyhPDI48w",
-            #"weave:///wandb-smle/e2e-hiring-assistant/object/evaluation_dataset:9nXWyt0NHI32sKBBvbsigEXvfeYox5AGks2YJ8KCJYU",
+            f"weave:///{wandb_entity}/{wandb_project}/object/evaluation_dataset:rERmeHPF4pmNYpTbAayZyFAr3oEzZlhYyVXyhPDI48w",
         )
         trials = st.number_input("Number of Trials", min_value=1, value=1)
         
@@ -652,7 +714,6 @@ if __name__ == "__main__":
                 )
                 results = asyncio.run(benchmark.evaluate(hiring_agent))
                 st.json(results)
-
     # Add this to the "Create Dataset" section in the main function
     else:  # Create Dataset
         st.header("Create Evaluation Dataset")
@@ -713,11 +774,10 @@ if __name__ == "__main__":
                         st.session_state.offer_paths = offer_paths
                         
                         # Log to W&B as artifact
-                        run = wandb.init(project="e2e-hiring-assistant", entity="wandb-smle", job_type="dataset-generation")
+                        run = wandb.init(project=wandb_project, entity=wandb_entity, job_type="dataset-generation")
                         
-                        # Save DataFrame to CSV
-                        csv_path = "applicant_characteristics.csv"
-                        characteristics_df.to_csv(csv_path, index=False)
+                        # Convert DataFrame to wandb.Table
+                        characteristics_table = wandb.Table(dataframe=characteristics_df)
                         
                         # Create and log artifact
                         artifact = wandb.Artifact(
@@ -725,7 +785,7 @@ if __name__ == "__main__":
                             type="dataset",
                             description="Structured table of applicant characteristics"
                         )
-                        artifact.add_file(csv_path)
+                        artifact.add(characteristics_table, "characteristics")
                         run.log_artifact(artifact)
                         
                         # Store artifact path in session state
@@ -772,14 +832,14 @@ if __name__ == "__main__":
             if st.button("Calculate R Score", key="calculate_r_score_btn"):
                 with st.spinner("Calculating R Score..."):
                     # Initialize W&B run
-                    run = wandb.init(project="e2e-hiring-assistant", entity="wandb-smle", job_type="dataset-evaluation")
+                    run = wandb.init(project=wandb_project, entity=wandb_entity, job_type="dataset-evaluation")
                     
                     # Use the artifact from the provided path
                     artifact = run.use_artifact(artifact_path)
-                    artifact_dir = artifact.download()
+                    characteristics_table = artifact.get("characteristics")
                     
-                    # Load the CSV file
-                    df = pd.read_csv(f"{artifact_dir}/applicant_characteristics.csv")
+                    # Convert wandb.Table to DataFrame
+                    df = characteristics_table.get_dataframe()
                     
                     # Store in session state for next step
                     st.session_state.characteristics_df = df
@@ -828,6 +888,27 @@ if __name__ == "__main__":
         with tab3:
             st.subheader("Step 3: Generate Applications")
             
+            # Check for offer PDFs first
+            if 'offer_paths' not in st.session_state:
+                st.warning("Please upload job offer files before proceeding.")
+                offer_uploader = st.file_uploader("Upload Offer PDFs", type=['pdf'], accept_multiple_files=True, key="offer_files_step3")
+                
+                if offer_uploader:
+                    # Save uploaded files and get job position IDs
+                    offer_paths = {}
+                    for f in offer_uploader:
+                        job_id = f.name.split('.')[0]  # Use filename as job ID
+                        save_path = f"./utils/data/offers/{f.name}"
+                        if not os.path.exists(save_path):
+                            with open(save_path, "wb") as file:
+                                file.write(f.getvalue())
+                        offer_paths[job_id] = save_path
+                    st.session_state.offer_paths = offer_paths
+                    st.success("Job offer files uploaded successfully!")
+                else:
+                    st.error("Cannot proceed without job offer files")
+                    st.stop()
+
             # Input for characteristics artifact path
             characteristics_artifact_path = st.text_input(
                 "Characteristics Artifact Path",
@@ -846,14 +927,14 @@ if __name__ == "__main__":
             if st.button("Generate Applications", key="generate_applications_btn"):
                 with st.spinner("Loading characteristics and generating applications..."):
                     # Initialize a new W&B run for application generation
-                    run = wandb.init(project="e2e-hiring-assistant", entity="wandb-smle", job_type="application-generation")
+                    run = wandb.init(project=wandb_project, entity=wandb_entity, job_type="application-generation")
                     
                     # Download the characteristics artifact
                     artifact = run.use_artifact(characteristics_artifact_path)
-                    artifact_dir = artifact.download()
+                    characteristics_table = artifact.get("characteristics")
                     
-                    # Load the characteristics DataFrame
-                    df = pd.read_csv(f"{artifact_dir}/applicant_characteristics.csv")
+                    # Convert wandb.Table to DataFrame
+                    df = characteristics_table.get_dataframe()
                     
                     # Calculate R score for the loaded characteristics
                     r_score = calculate_r_score(df)
@@ -868,34 +949,10 @@ if __name__ == "__main__":
                         can_proceed = False
                         
                     if can_proceed:
-                        # Get offer paths from session state or from the artifact metadata
-                        if 'offer_paths' in st.session_state:
-                            offer_paths = st.session_state.offer_paths
-                        else:
-                            # If offer paths not in session state, we need to handle this case
-                            # This could involve downloading offer files from another artifact
-                            # or prompting the user to upload them again
-                            st.warning("Job offer files not found in session. Please upload them again.")
-                            offer_uploader = st.file_uploader("Upload Offer PDFs Again", type=['pdf'], accept_multiple_files=True, key="offer_files_step3")
-                            
-                            if not offer_uploader:
-                                st.error("Cannot proceed without job offer files")
-                                st.stop()
-                                
-                            # Save uploaded files and get job position IDs
-                            offer_paths = {}
-                            for f in offer_uploader:
-                                job_id = f.name.split('.')[0]  # Use filename as job ID
-                                save_path = f"./utils/data/offers/{f.name}"
-                                if not os.path.exists(save_path):
-                                    with open(save_path, "wb") as file:
-                                        file.write(f.getvalue())
-                                offer_paths[job_id] = save_path
-                        
-                        # Generate applications
+                        # Generate applications using offer paths from session state
                         dataset_struct = generate_application_from_characteristics(
                             characteristics_df=df,
-                            offer_paths=offer_paths,
+                            offer_paths=st.session_state.offer_paths,
                             generation_model=generation_model
                         )
                         
