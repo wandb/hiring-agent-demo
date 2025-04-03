@@ -25,6 +25,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import wandb
+import time
 
 from utils.prompt import (
     CV, Offer, InterviewDecision, 
@@ -196,23 +197,13 @@ class HallucinationGuardrail:
 
 @weave.op
 def expert_review(state: GraphState):
-    """Mark call as needing expert review using the "hitl" tag and wait for expert to provide decision and reason."""
-    value = interrupt(
-      # Any JSON serializable value to surface to the human.
-      # For example, a question or a piece of text or a set of keys in the state
-      {
-         "decision": state["decision"],
-         "reason": state["reason"],
-         "has_hallucination": state["has_hallucination"],
-         "job_offer_extract": state["job_offer_extract"],
-         "application_extract": state["application_extract"],
-      }
-    )
-    state["decision"] = value["decision"]
-    state["reason"] = value["reason"]
-    state["has_hallucination"] = value["has_hallucination"]
-    state["job_offer_extract"] = value["job_offer_extract"]
-    state["application_extract"] = value["application_extract"]
+    """Mark call as needing expert review using feedback instead of a tag."""
+    # Mark the call as needing expert review using feedback
+    current_call = get_current_call()
+    if current_call:
+        current_call.feedback.add("needs_expert_review", {"value": True})
+    
+    # Just pass through the state
     return state
 
 @weave.op
@@ -234,8 +225,8 @@ def validate(state: GraphState) -> str:
         print("---DECISION: Hallucination detected, will retry---")
         return "retry"
     elif has_hallucination == True and state["tries"] >= 2:
-        print("---DECISION: Hallucination detected, too many retries, reaching to expert---")
-        return "hitl"
+        print("---DECISION: Hallucination detected, too many retries, marking for expert review---")
+        return "expert_review"
     else:
         print("---DECISION: Answer Accepted---")
         return "valid"
@@ -276,13 +267,13 @@ def create_wf(
             validate,
             {
                 "retry": "compare_application_offer",
-                "hitl": "expert_review",
+                "expert_review": "expert_review",
                 "valid": END,
             },
         )
         workflow.add_edge("expert_review", END)
 
-    # A checkpointer is required for `interrupt` to work.
+    # A checkpointer is required for LangGraph
     checkpointer = MemorySaver()
 
     # Compile the workflow
@@ -310,60 +301,260 @@ def create_wf_graph(app):
         # If any error occurs (for example, missing dependencies), print the error.
         print(f"An error occurred: {e}")
 
+# Initialize key session state variables
+if 'waiting_for_review' not in st.session_state:
+    st.session_state.waiting_for_review = False
+if 'call_id_for_review' not in st.session_state:
+    st.session_state.call_id_for_review = None
+if 'in_expert_review' not in st.session_state:
+    st.session_state.in_expert_review = False
+if 'expert_reason_input' not in st.session_state:
+    st.session_state.expert_reason_input = ""
+if 'expert_decision_input' not in st.session_state:
+    st.session_state.expert_decision_input = "True"
+
+# Initialize deprecated variables for backward compatibility
+if 'expert_decision_spec_created' not in st.session_state:
+    st.session_state.expert_decision_spec_created = False  # Deprecated but needed for compatibility
+if 'expert_reason_spec_created' not in st.session_state:
+    st.session_state.expert_reason_spec_created = False  # Deprecated but needed for compatibility
+
+def submit_expert_review(call_id, decision, reason):
+    """Submit expert review directly - no form needed."""
+    print(f"submit_expert_review called with call_id={call_id}, decision={decision}")
+    
+    try:
+        # Initialize Weave client
+        client = weave.init(f"{st.session_state.wandb_entity}/{st.session_state.wandb_project}")
+        
+        # Get the call by ID
+        call = client.get_call(call_id)
+        
+        # Convert decision to boolean for consistency
+        decision_bool = decision == "True"
+        
+        # Add comprehensive feedback note for easy viewing
+        call.feedback.add_note(f"Expert Review: {'Recommend' if decision_bool else 'Do Not Recommend'}")
+        
+        # Add structured feedback using the standard add method
+        call.feedback.add("expert_review", {
+            "decision": decision_bool,
+            "reason": reason,
+            "timestamp": time.time()
+        })
+        
+        # Log to W&B for additional tracking
+        run = wandb.init(
+            project=st.session_state.wandb_project, 
+            entity=st.session_state.wandb_entity, 
+            job_type="expert_review"
+        )
+        run.log({
+            "expert_decision": decision_bool,
+            "expert_reason": reason,
+            "call_id": call_id,
+            "model_decision": st.session_state.decision,
+            "model_reason": st.session_state.reason
+        })
+        run.finish()
+        
+        # Return success
+        return True
+        
+    except Exception as e:
+        print(f"Error in submit_expert_review: {str(e)}")
+        st.error(f"Error adding feedback: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc(), language="python")
+        return False
+
+def streamlit_expert_panel(): 
+    """Display the expert review panel using direct button handling instead of a form."""
+    st.header("Expert Review Required")
+    
+    # Set the in_expert_review flag to ensure we stay in this state during reloads
+    st.session_state.in_expert_review = True
+    
+    # Get the call ID
+    call_id = st.session_state.call_id_to_annotate
+    st.info(f"Your review will be attached to call ID: {call_id}")
+    
+    # Show model output
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown('<div style="background-color: #f0f8ff; padding: 10px; border-radius: 5px;">', unsafe_allow_html=True)
+        st.subheader("Job Offer Details")
+        st.write(st.session_state.job_offer_extract)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+    with col2:
+        st.markdown('<div style="background-color: #fff0f5; padding: 10px; border-radius: 5px;">', unsafe_allow_html=True)
+        st.subheader("Application Details") 
+        st.write(st.session_state.application_extract)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown("### Model Decision")
+    st.write("Decision: ", "Recommend to Interview" if st.session_state.decision else "Do Not Recommend")
+    st.write("Reasoning: ", st.session_state.reason)
+    
+    # Expert review input
+    st.markdown("### Your Expert Review")
+    
+    # Initialize the expert reason with the model's reason if empty
+    if not st.session_state.expert_reason_input:
+        st.session_state.expert_reason_input = st.session_state.reason
+        
+    # Initialize the expert decision with the model's decision if not set
+    if not st.session_state.expert_decision_input:
+        st.session_state.expert_decision_input = "True" if st.session_state.decision else "False"
+    
+    # Create callback functions to update session state
+    def update_reason():
+        # This will be called when the text area changes
+        print(f"Updating expert reason to: {st.session_state.expert_reason_temp}")
+        st.session_state.expert_reason_input = st.session_state.expert_reason_temp
+        
+    def update_decision():
+        # This will be called when the selectbox changes
+        print(f"Updating expert decision to: {st.session_state.expert_decision_temp}")
+        st.session_state.expert_decision_input = st.session_state.expert_decision_temp
+    
+    # Expert reasoning input with explicit key and on_change
+    st.text_area(
+        "Expert Reasoning", 
+        value=st.session_state.expert_reason_input,
+        key="expert_reason_temp",
+        on_change=update_reason,
+        height=200
+    )
+    
+    # Expert decision input with explicit key and on_change
+    st.selectbox(
+        "Expert Decision", 
+        options=["True", "False"],
+        index=0 if st.session_state.expert_decision_input == "True" else 1,
+        key="expert_decision_temp",
+        on_change=update_decision
+    )
+    
+    # Submit button - directly calls the function
+    if st.button("Submit Expert Review", type="primary"):
+        # Print debug values to confirm what we're using
+        print("---- Expert Review Submission ----")
+        print(f"Expert decision: {st.session_state.expert_decision_input}")
+        print(f"Expert reason: {st.session_state.expert_reason_input}")
+        
+        # Verify we have the data we need
+        if not call_id:
+            st.error("Missing call ID")
+            return
+            
+        if not st.session_state.expert_reason_input:
+            st.error("Please provide reasoning")
+            return
+            
+        # Process the submission
+        with st.spinner("Submitting expert review..."):
+            success = submit_expert_review(
+                call_id=call_id,
+                decision=st.session_state.expert_decision_input,
+                reason=st.session_state.expert_reason_input
+            )
+            
+        # Show result
+        if success:
+            st.success("🎉 Expert review successfully annotated!")
+            st.session_state.waiting_for_review = False
+            st.session_state.in_expert_review = False  # Clear the review flag on success
+            
+            # Show final decision
+            st.header("Final Expert Decision")
+            if st.session_state.expert_decision_input == "True":
+                st.success("✅ Expert Recommends to Interview")
+            else:
+                st.error("❌ Expert Does Not Recommend")
+            
+            st.subheader("Expert Reasoning")
+            st.write(st.session_state.expert_reason_input)
+        else:
+            st.error("Failed to submit expert review. Please try again.")
+
+# Update stream_graph_updates to set waiting_for_review flag
 def stream_graph_updates(app, offer_pdf: str, application_pdf: str):
-    # Pass a thread ID to the graph to run it - to be able to resume after human interrupt
+    # Set up a thread ID for the graph
     if "thread_config" not in st.session_state:
         st.session_state.thread_config = {"configurable": {"thread_id": uuid.uuid4()}}
 
-    if 'interrupt' not in st.session_state:
-        st.session_state.interrupt = False
-
-    # If no existing session should be resumed start a new event loop otherwise resume existing one
-    if not st.session_state.interrupt: 
+    # Start a new event loop
+    result = {}
+    print("Starting HiringAgent prediction workflow...")
+    
+    try:
+        # Execute the prediction
         for event in app.stream({"offer_pdf": offer_pdf, "application_pdf": application_pdf}, config=st.session_state.thread_config):
-            interrupt_content = event.get("__interrupt__", "")
-            if interrupt_content:
-                value = interrupt_content[0].value
-                reason = value.get("reason", "")
-                decision = value.get("decision", "")
-                has_hallucination = value.get("has_hallucination", "")
-                job_offer_extract = value.get("job_offer_extract", "")
-                application_extract = value.get("application_extract", "")
-                st.session_state.interrupt = True
-                st.session_state.job_offer_extract = job_offer_extract
-                st.session_state.application_extract = application_extract
-                st.session_state.reason = reason
-                st.session_state.decision = decision
-                st.session_state.has_hallucination = has_hallucination
-            else:
-                for value in event.values():
-                    print("Assistant:", value)
-                    reason = value.get("reason", "")
-                    decision = value.get("decision", "")
-                    has_hallucination = value.get("has_hallucination", "")
-                    job_offer_extract = value.get("job_offer_extract", "")
-                    application_extract = value.get("application_extract", "")
-    else: 
-        resuming_payload = {
-            "decision": st.session_state.corrected_decision == "True",
-            "reason": st.session_state.corrected_reason,
-            "has_hallucination": st.session_state.has_hallucination,
-            "job_offer_extract": st.session_state.job_offer_extract,
-            "application_extract": st.session_state.application_extract,
-        }
-        for event in app.stream(Command(resume=resuming_payload), config=st.session_state.thread_config):
-            for value in event.values():
-                print("Assistant:", value)
-                reason = value.get("reason", "")
-                decision = value.get("decision", "")
-                has_hallucination = value.get("has_hallucination", "")
-        st.session_state.interrupt = False
+            for key, value in event.items():
+                if key != "__interrupt__":  # Ignore any interrupt events
+                    print(f"Event: {key}")
+                    if isinstance(value, dict):
+                        # Store results in session state
+                        reason = value.get("reason", "")
+                        decision = value.get("decision", "")
+                        has_hallucination = value.get("has_hallucination", "")
+                        job_offer_extract = value.get("job_offer_extract", "")
+                        application_extract = value.get("application_extract", "")
+                        
+                        st.session_state.reason = reason
+                        st.session_state.decision = decision
+                        st.session_state.has_hallucination = has_hallucination
+                        st.session_state.job_offer_extract = job_offer_extract
+                        st.session_state.application_extract = application_extract
+                        
+                        # Update the result dictionary
+                        result = {
+                            'interview': decision,
+                            'reason': reason,
+                            'has_hallucination': has_hallucination
+                        }
         
-    return {
-            'interview': decision,
-            'reason': reason,
-            'has_hallucination': has_hallucination
-        }
+        # Get the current call ID and save it
+        print("Prediction complete - Getting current call ID...")
+        current_call = get_current_call()
+        if current_call:
+            call_id = current_call.id
+            st.session_state.call_id_to_annotate = call_id
+            print(f"Saved call ID for annotation: {call_id}")
+        else:
+            print("Warning: Could not get current call ID")
+            # Fallback: try to get the most recent call
+            try:
+                client = weave.init(f"{st.session_state.wandb_entity}/{st.session_state.wandb_project}")
+                calls = client.get_calls(
+                    filter={"trace_roots_only": True},
+                    sort_by=[{"field":"started_at","direction":"desc"}],
+                    limit=1
+                )
+                if calls:
+                    call_id = calls[0].id
+                    st.session_state.call_id_to_annotate = call_id
+                    print(f"Saved most recent call ID: {call_id}")
+                else:
+                    print("Warning: No recent calls found")
+            except Exception as e:
+                print(f"Error getting recent calls: {str(e)}")
+        
+        # Set expert review flag based on hallucination or settings
+        if expert_review_options == "Always On" or has_hallucination:
+            st.session_state.waiting_for_review = True
+            print("Expert review needed")
+        else:
+            st.session_state.waiting_for_review = False
+            print("No expert review needed")
+        
+    except Exception as e:
+        print(f"Error in prediction workflow: {str(e)}")
+        st.error(f"Error in prediction: {str(e)}")
+    
+    return result
 
 class HiringAgent(weave.Model):
     """HiringAgent based on OpenAI with Guardrail."""
@@ -392,46 +583,85 @@ class HiringAgent(weave.Model):
         result = stream_graph_updates(self._app, offer_pdf, application_pdf)
         return result
     
-def streamlit_expert_panel(): 
-    st.header("Expert Review Required")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown('<div style="background-color: #f0f8ff; padding: 10px; border-radius: 5px;">', unsafe_allow_html=True)
-        st.subheader("Job Offer Details")
-        st.write(st.session_state.job_offer_extract)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-    with col2:
-        st.markdown('<div style="background-color: #fff0f5; padding: 10px; border-radius: 5px;">', unsafe_allow_html=True)
-        st.subheader("Application Details") 
-        st.write(st.session_state.application_extract)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown("### Current Model Output")
-    st.subheader("Decision")
-    st.write(st.session_state.decision)
-    st.subheader("Reasoning")
-    st.write(st.session_state.reason)
-    
-    # Use form to prevent refresh on input
-    with st.form("expert_review_form"):
-        st.markdown("### Expert Override")
-        corrected_reason = st.text_area("Corrected Reasoning", key="corrected_reason")
-        corrected_decision = st.selectbox("Final Decision", ["True", "False"], key="corrected_decision")
-        st.session_state.corrected_reason = corrected_reason
-        st.session_state.corrected_decision = corrected_decision
-        submit = st.form_submit_button("Submit Expert Decision")
+# Initialize session state for form handling
+if 'form_submitted' not in st.session_state:
+    st.session_state.form_submitted = False
+if 'expert_decision' not in st.session_state:
+    st.session_state.expert_decision = None
+if 'expert_reason' not in st.session_state:
+    st.session_state.expert_reason = None
 
-    if submit:
-        st.session_state.corrected_reason = corrected_reason
-        st.session_state.corrected_decision = corrected_decision
-        st.success("Expert decision recorded successfully!")
+# Debug info at the very beginning of the app
+print(f"[APP START] form_submitted: {st.session_state.form_submitted}")
+print(f"[APP START] expert_decision: {st.session_state.expert_decision}")
+if st.session_state.form_submitted:
+    print(f"[APP START] We should process expert review!")
+
+# Function to save form data when submit button is pressed
+def handle_form_submit():
+    """This is called when the form submit button is clicked."""
+    # Get values directly from the form fields
+    decision = st.session_state.expert_decision
+    reason = st.session_state.expert_reason
+    
+    # Log what we're doing
+    print(f"Submit callback - setting form_submitted=True")
+    print(f"Submit callback - decision: {decision}")
+    print(f"Submit callback - reason length: {len(reason) if reason else 0}")
+    
+    # Set the form_submitted flag and session state values
+    st.session_state.form_submitted = True
+    
+    # Just to be extra safe, set the values explicitly again
+    st.session_state.expert_decision = decision
+    st.session_state.expert_reason = reason
+
+# Add the main app debug panel
+def show_debug_panel():
+    with st.expander("Debug Information", expanded=True):
+        st.subheader("Session State")
+        st.write("form_submitted:", st.session_state.form_submitted)
+        st.write("expert_decision:", st.session_state.expert_decision)
+        if st.session_state.expert_reason:
+            st.write(f"expert_reason length: {len(st.session_state.expert_reason)}")
+        st.write("call_id_to_annotate:", st.session_state.call_id_to_annotate)
+        
+        st.subheader("Debug Logs (most recent first)")
+        if 'debug_logs' in st.session_state and st.session_state.debug_logs:
+            logs = list(st.session_state.debug_logs)
+            logs.reverse()  # Show most recent first
+            for log in logs[:20]:  # Show last 20 logs
+                st.text(log)
+
 if __name__ == "__main__":
     # Setup
     load_dotenv("utils/.env")
     st.set_page_config(page_title="Hiring Assistant", layout="wide")
     st.title("Hiring Assistant")
+    
+    # Initialize session state
+    if 'expert_review_needed' not in st.session_state:
+        st.session_state.expert_review_needed = False
+    if 'call_id_to_annotate' not in st.session_state:
+        st.session_state.call_id_to_annotate = None
+    if 'prediction_results' not in st.session_state:
+        st.session_state.prediction_results = None
+    if 'debug_logs' not in st.session_state:
+        st.session_state.debug_logs = []
+    # Add states for form submission across reloads
+    if 'pending_annotation' not in st.session_state:
+        st.session_state.pending_annotation = False
+    if 'form_decision' not in st.session_state:
+        st.session_state.form_decision = None
+    if 'form_reason' not in st.session_state:
+        st.session_state.form_reason = None
+    
+    # Create a utility function for logging debug info
+    def log_debug(message):
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] {message}"
+        st.session_state.debug_logs.append(log_entry)
+        print(log_entry)  # Also print to console for server logs
     
     # Sidebar for mode selection and model configuration
     with st.sidebar:
@@ -639,61 +869,76 @@ if __name__ == "__main__":
 
     elif mode == "Single Test":
         st.header("Upload Documents")
-        col1, col2 = st.columns(2)
         
-        with col1:
-            offer_file = st.file_uploader("Upload Job Offer PDF", type=['pdf'])
-            if offer_file:
-                with open("temp_offer.pdf", "wb") as f:
-                    f.write(offer_file.getbuffer())
-                st.success("Offer PDF uploaded successfully")
-                
-        with col2:
-            application_file = st.file_uploader("Upload Application PDF", type=['pdf'])
-            if application_file:
-                with open("temp_application.pdf", "wb") as f:
-                    f.write(application_file.getbuffer())
-                st.success("Application PDF uploaded successfully")
-
-        if offer_file and application_file:
-            if st.button("Evaluate Application"):
-                with st.spinner("Processing documents..."):
-                    offer_images = pdf_to_images("temp_offer.pdf")
-                    application_images = pdf_to_images("temp_application.pdf")
+        # Check if we're in the middle of an expert review
+        if st.session_state.in_expert_review:
+            print("Resuming expert review panel...")
+            streamlit_expert_panel()
+        else:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                offer_file = st.file_uploader("Upload Job Offer PDF", type=['pdf'])
+                if offer_file:
+                    with open("temp_offer.pdf", "wb") as f:
+                        f.write(offer_file.getbuffer())
+                    st.success("Offer PDF uploaded successfully")
                     
-                    result = hiring_agent.predict(
-                        offer_pdf="temp_offer.pdf",
-                        application_pdf="temp_application.pdf",
-                        offer_images=offer_images,
-                        application_images=application_images
-                    )
+            with col2:
+                application_file = st.file_uploader("Upload Application PDF", type=['pdf'])
+                if application_file:
+                    with open("temp_application.pdf", "wb") as f:
+                        f.write(application_file.getbuffer())
+                    st.success("Application PDF uploaded successfully")
 
-                    # Check if user interruption was triggered show expert panel
-                    if st.session_state.interrupt:
-                        streamlit_expert_panel()
-                        # streamlit session state will treat this call differently 
+            if offer_file and application_file:
+                if st.button("Evaluate Application"):
+                    # Clear previous results
+                    st.session_state.waiting_for_review = False
+                    st.session_state.in_expert_review = False
+                    st.session_state.call_id_to_annotate = None
+                    st.session_state.expert_reason_input = ""
+                    st.session_state.expert_decision_input = "True"
+                    
+                    with st.spinner("Processing documents..."):
+                        print("Starting document evaluation...")
+                        
+                        # Process the documents
+                        offer_images = pdf_to_images("temp_offer.pdf")
+                        application_images = pdf_to_images("temp_application.pdf")
+                        
+                        # Run the prediction
                         result = hiring_agent.predict(
                             offer_pdf="temp_offer.pdf",
                             application_pdf="temp_application.pdf",
                             offer_images=offer_images,
                             application_images=application_images
                         )
+                        
+                        print("Prediction complete. Results saved.")
+                    
+                    # Check if expert review is needed
+                    if st.session_state.waiting_for_review:
+                        print("Showing expert review panel...")
+                        st.warning("⚠️ Expert Review Required")
+                        # Set the flag before showing the panel
+                        st.session_state.in_expert_review = True 
+                        streamlit_expert_panel()
+                    else:
+                        # Show normal output
+                        print("Showing normal output...")
+                        st.header("Results")
+                        if result['interview']:
+                            st.success("✅ Recommend to Interview")
+                        else:
+                            st.error("❌ Do Not Recommend")
+                        
+                        st.subheader("Reasoning")
+                        st.write(result['reason'])
 
-                # TODO: this should be shown once expert review is submitted
-                st.header("Results")
-                if result['interview'] == 'PENDING_REVIEW':
-                    st.warning("⚠️ Decision Pending Expert Review")
-                elif result['interview']:
-                    st.success("✅ Recommend to Interview")
-                else:
-                    st.error("❌ Do Not Recommend")
-                
-                st.subheader("Reasoning")
-                st.write(result['reason'])
-
-                # Cleanup
-                os.remove("temp_offer.pdf")
-                os.remove("temp_application.pdf")
+                    # Cleanup
+                    os.remove("temp_offer.pdf")
+                    os.remove("temp_application.pdf")
 
     elif mode == "Batch Testing":
         st.header("Batch Evaluation")
