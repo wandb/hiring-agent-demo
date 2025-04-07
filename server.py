@@ -107,6 +107,12 @@ class CompareApplicationOffer:
     @weave.op(name="CompareApplicationOfferCall")
     def __call__(self, state: GraphState):
         """Compare the application and offer and decide if they are fitting and why."""
+        # track inference
+        run = wandb.init(
+            project=st.session_state.wandb_project, 
+            entity=st.session_state.wandb_entity, 
+            job_type="inference"
+        )
 
         state["tries"] = 1 if not state.get("tries") else state.get("tries")+1
         application_extract = state["application_extract"]
@@ -117,14 +123,6 @@ class CompareApplicationOffer:
                 model=self.comparison_model,
                 response_format={"type": "json"}).with_structured_output(InterviewDecision)
         elif self.comparison_model.startswith("wandb-artifact:///"):
-            # NOTE: this doesn't work with weave.Evaluation and parallel processing
-            # track inference 
-            run = wandb.init(
-                project=wandb_project, 
-                entity=wandb_entity, 
-                job_type="inference"
-            )
-            
             # Extract model name from the artifact path
             artifact_name = self.comparison_model.split("/")[-1]
             model_name = artifact_name.split(":")[0]
@@ -154,16 +152,16 @@ class CompareApplicationOffer:
         decision = model.invoke(comparison_document)
         state["reason"] = decision.reason
         state["decision"] = decision.decision
-        
-        if self.comparison_model.startswith("wandb-artifact:///"):
-            run.log({
-                "decision": decision.decision,
-                "reason": decision.reason,
-                "job_offer_extract": job_offer_extract,
-                "application_extract": application_extract,
-                "comparison_document": comparison_document
-            })
-            run.finish()
+
+
+        run.log({
+            "decision": decision.decision,
+            "reason": decision.reason,
+            "job_offer_extract": job_offer_extract,
+            "application_extract": application_extract,
+            "comparison_document": comparison_document
+        })
+        run.finish()
         return state
 
 class HallucinationGuardrail:
@@ -180,7 +178,7 @@ class HallucinationGuardrail:
         )
         decision_reason = "Decision: We should move on with an interview\n" if state["decision"] else "Decision: We should NOT move on with an interview\n"
         decision_reason += f"Reason: {state['reason']}"
-        latest_context_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/context_prompt:latest").get()
+        latest_context_prompt = weave.ref("weave:///wandb-smle/e2e-hiring-assistant/object/context_prompt:latest").get()
         context_document = latest_context_prompt.format(
             job_offer_extract=job_offer_extract,
             application_extract=application_extract
@@ -345,6 +343,9 @@ def submit_expert_review(call_id, decision, reason):
             "reason": reason,
             "timestamp": time.time()
         })
+
+        # Add emoji showing expert review
+        call.feedback.add_reaction("👀")
         
         # Log to W&B for additional tracking
         run = wandb.init(
@@ -673,15 +674,8 @@ def validate_api_keys(comparison_model):
         
         if not any(key in missing_keys for key in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]):
             try:
-                boto3.client(
-                    service_name="bedrock-runtime",
-                    region_name=os.environ["AWS_DEFAULT_REGION"],
-                    aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-                    aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-                    aws_session_token=os.environ["AWS_SESSION_TOKEN"],
-                )
-            except Exception as e:
-                print(f"Error initializing bedrock: {e}")
+                boto3.client("bedrock-runtime").list_foundation_models()
+            except Exception:
                 invalid_keys.extend(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"])
     
     return missing_keys, invalid_keys
@@ -724,7 +718,7 @@ if __name__ == "__main__":
         st.subheader("W&B Configuration")
         # Default entity and project from environment variables or hardcoded defaults
         default_entity = os.environ.get("WANDB_ENTITY", "wandb-smle")
-        default_project = os.environ.get("WANDB_PROJECT", "e2e-hiring-assistant-test")
+        default_project = os.environ.get("WANDB_PROJECT", "e2e-hiring-assistant")
 
         wandb_entity = st.text_input("W&B Entity", value=default_entity, help="Your W&B entity/username")
         wandb_project = st.text_input("W&B Project", value=default_project, help="Your W&B project name")
@@ -744,8 +738,7 @@ if __name__ == "__main__":
             "Comparison Model", 
             openai_models+[
                 "us.anthropic.claude-3-5-sonnet-20241022-v2:0", 
-                "us.amazon.nova-lite-v1:0",
-                "custom-wandb-artifact-model"
+                "us.amazon.nova-lite-v1:0"
             ]
         )
         
@@ -772,7 +765,7 @@ if __name__ == "__main__":
         if comparison_model not in openai_models and not comparison_model.startswith("wandb-artifact:///"):
             boto_client = boto3.client(
                 service_name="bedrock-runtime",
-                region_name=os.environ["AWS_DEFAULT_REGION"],
+                region_name="us-west-2",
                 aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
                 aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
                 aws_session_token=os.environ["AWS_SESSION_TOKEN"],
@@ -791,7 +784,7 @@ if __name__ == "__main__":
         add_model = st.button("+ Add Model to Ollama")
         
         # If custom artifact is provided, use it instead
-        if comparison_model == "custom-wandb-artifact-model" and custom_artifact:
+        if custom_artifact:
             comparison_model = "wandb-artifact:///" + custom_artifact
             
             # Only check for Ollama if using a W&B artifact and the add button is clicked
@@ -1011,6 +1004,18 @@ if __name__ == "__main__":
                         
                         st.subheader("Reasoning")
                         st.write(result['reason'])
+
+                        # Get the call ID
+                        call_id = st.session_state.call_id_to_annotate
+
+                        # Verify we have the data we need
+                        if call_id:
+                            # Get the call by ID
+                            call = client.get_call(call_id)
+                            call.feedback.add_reaction("🤖")
+                        
+                        else:
+                            st.error("Missing call ID")
 
                     # Cleanup
                     os.remove("temp_offer.pdf")
