@@ -724,7 +724,7 @@ if __name__ == "__main__":
         st.subheader("W&B Configuration")
         # Default entity and project from environment variables or hardcoded defaults
         default_entity = os.environ.get("WANDB_ENTITY", "wandb-smle")
-        default_project = os.environ.get("WANDB_PROJECT", "e2e-hiring-assistant")
+        default_project = os.environ.get("WANDB_PROJECT", "e2e-hiring-assistant-test")
 
         wandb_entity = st.text_input("W&B Entity", value=default_entity, help="Your W&B entity/username")
         wandb_project = st.text_input("W&B Project", value=default_project, help="Your W&B project name")
@@ -744,7 +744,8 @@ if __name__ == "__main__":
             "Comparison Model", 
             openai_models+[
                 "us.anthropic.claude-3-5-sonnet-20241022-v2:0", 
-                "us.amazon.nova-lite-v1:0"
+                "us.amazon.nova-lite-v1:0",
+                "custom-wandb-artifact-model"
             ]
         )
         
@@ -790,7 +791,7 @@ if __name__ == "__main__":
         add_model = st.button("+ Add Model to Ollama")
         
         # If custom artifact is provided, use it instead
-        if custom_artifact:
+        if comparison_model == "custom-wandb-artifact-model" and custom_artifact:
             comparison_model = "wandb-artifact:///" + custom_artifact
             
             # Only check for Ollama if using a W&B artifact and the add button is clicked

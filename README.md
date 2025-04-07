@@ -29,6 +29,8 @@ Once the operator UI is launched through streamlit there are four modes that can
     - Paste in weave URL of evaluation dataset that you generated
     - Run evaluation
 
+To run the fine-tuned comparison model first click on "Add Model to Ollama" if you haven't yet installed the model locally and then select `custom-wandb-artifact-model` in the "Comparison Model" dropdown.
+
 ## Setup
 1. (Recommended) Create a virtual environment and install dependencies:
 ```bash
