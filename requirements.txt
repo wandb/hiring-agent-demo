@@ -50,6 +50,7 @@ langgraph-checkpoint==2.0.24
 langgraph-prebuilt==0.1.8
 langgraph-sdk==0.1.61
 langsmith==0.3.24
+litellm
 markdown-it-py==3.0.0
 marshmallow==3.26.1
 mypy-extensions==1.0.0
