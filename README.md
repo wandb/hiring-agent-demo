@@ -1,16 +1,33 @@
 # Hiring Agent Demo
 E2E Models + Weave demo. Also serves as the demo project for the EU AI Act. 
 
-This repository contains a demo of a hiring agent that can evaluate job applications against job offers using LangChain and multiple LLM providers.
+This repository contains a demo of a hiring agent that can evaluate job applications against job offers using Langgraph and multiple LLM providers.
 
 ## Features
 - Automated evaluation of job applications against requirements
 - Support for multiple LLM providers (OpenAI, AWS Bedrock, Ollama)
-- PDF processing capabilities
-- Hallucination detection and guardrails
+- PDF processing capabilities (multi-modal visualization)
+- Hallucination detection and guardrails (incl. self-relfection and HITL)
 - Expert review system
 - Integration with Weights & Biases Models and Weave
 
+## Usage
+Once the operator UI is launched through streamlit there are four modes that can be select through the dropdown menu under "Select Mode". If you create a new project make sure to **execute them chronologically**: 
+1. `Create Dataset`
+    - Drag in job positions as PDFs (e.g. downloading wandb job positions)
+    - Generate applicant characteristics table
+    - Go to next step and calculate R score (no changes needed)
+    - Go to next step and generate actual evaluation and fine-tuning dataset
+2. `Manage Prompts`
+    - If it's the first time you're running the project click `Publish Context Prompt` for every tab (change prompt if you want)
+3. `Single Test`
+    - Drag in one of the job position PDFs and one of the generated application PDFs (under `utils/data/applications`)
+    - Decide whether to use a hallucination guardrail on the hiring reason in the config panel on the left
+    - Decide whether to enable expert reviews (by default means if guardrail fails twice even after self-reflecting the first time)
+4. `Batch Testing`
+    - Turn expert review mode off (not compatible because of parallel evaluation yet)
+    - Paste in weave URL of evaluation dataset that you generated
+    - Run evaluation
 
 ## Setup
 1. (Recommended) Create a virtual environment and install dependencies:
