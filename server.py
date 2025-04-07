@@ -633,6 +633,49 @@ def show_debug_panel():
             for log in logs[:20]:  # Show last 20 logs
                 st.text(log)
 
+def validate_api_keys(comparison_model):
+    """Validate that all required API keys are present and valid."""
+    missing_keys = []
+    invalid_keys = []
+    
+    # Check OpenAI API key
+    if not os.getenv("OPENAI_API_KEY"):
+        missing_keys.append("OPENAI_API_KEY")
+    else:
+        try:
+            client = OpenAI()
+            client.models.list()  # Test the API key
+        except Exception:
+            invalid_keys.append("OPENAI_API_KEY")
+    
+    # Check W&B API key
+    if not os.getenv("WANDB_API_KEY"):
+        missing_keys.append("WANDB_API_KEY")
+    else:
+        try:
+            wandb.login()
+        except Exception:
+            invalid_keys.append("WANDB_API_KEY")
+    
+    # Check AWS credentials if using Bedrock
+    if comparison_model not in openai_models and not comparison_model.startswith("wandb-artifact:///"):
+        if not os.getenv("AWS_ACCESS_KEY_ID"):
+            missing_keys.append("AWS_ACCESS_KEY_ID")
+        if not os.getenv("AWS_SECRET_ACCESS_KEY"):
+            missing_keys.append("AWS_SECRET_ACCESS_KEY")
+        if not os.getenv("AWS_SESSION_TOKEN"):
+            missing_keys.append("AWS_SESSION_TOKEN")
+        if not os.getenv("AWS_DEFAULT_REGION"):
+            missing_keys.append("AWS_DEFAULT_REGION")
+        
+        if not any(key in missing_keys for key in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]):
+            try:
+                boto3.client("bedrock-runtime").list_foundation_models()
+            except Exception:
+                invalid_keys.extend(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"])
+    
+    return missing_keys, invalid_keys
+
 if __name__ == "__main__":
     # Setup
     load_dotenv("utils/.env")
@@ -682,15 +725,6 @@ if __name__ == "__main__":
         
         # Initialize Weave client with the provided entity and project
         client = weave.init(f"{wandb_entity}/{wandb_project}")
-        boto_client = boto3.client(
-            service_name="bedrock-runtime",
-            region_name="us-west-2",
-            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-            aws_session_token=os.environ["AWS_SESSION_TOKEN"],
-        )
-        # patching step for Weave
-        patch_client(boto_client)
         
         mode = st.selectbox("Select Mode", ["Create Dataset", "Manage Prompts", "Single Test", "Batch Testing"])
         
@@ -702,7 +736,38 @@ if __name__ == "__main__":
                 "us.anthropic.claude-3-5-sonnet-20241022-v2:0", 
                 "us.amazon.nova-lite-v1:0"
             ]
-        ) 
+        )
+        
+        # Add API Key Validation section after model selection
+        st.subheader("API Key Status")
+        missing_keys, invalid_keys = validate_api_keys(comparison_model)
+        
+        if missing_keys:
+            st.error("❌ Missing API Keys:")
+            for key in missing_keys:
+                st.error(f"- {key}")
+            st.warning("Please add the missing keys to your .env file")
+        
+        if invalid_keys:
+            st.error("❌ Invalid API Keys:")
+            for key in invalid_keys:
+                st.error(f"- {key}")
+            st.warning("Please check your API keys in the .env file")
+        
+        if not missing_keys and not invalid_keys:
+            st.success("✅ All required API keys are valid!")
+        
+        # Initialize AWS client if needed
+        if comparison_model not in openai_models and not comparison_model.startswith("wandb-artifact:///"):
+            boto_client = boto3.client(
+                service_name="bedrock-runtime",
+                region_name="us-west-2",
+                aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+                aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+                aws_session_token=os.environ["AWS_SESSION_TOKEN"],
+            )
+            # patching step for Weave
+            patch_client(boto_client)
         
         # Add optional input field for custom artifact path
         custom_artifact = st.text_input(

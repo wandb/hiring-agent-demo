@@ -1,13 +1,37 @@
 # Hiring Agent Demo
 E2E Models + Weave demo. Also serves as the demo project for the EU AI Act. 
 
+This repository contains a demo of a hiring agent that can evaluate job applications against job offers using LangChain and multiple LLM providers.
+
+## Features
+- Automated evaluation of job applications against requirements
+- Support for multiple LLM providers (OpenAI, AWS Bedrock, Ollama)
+- PDF processing capabilities
+- Hallucination detection and guardrails
+- Expert review system
+- Integration with Weights & Biases Models and Weave
+
+
 ## Setup
-1. Create `utils/.env` and install `requirements.txt`
-2. Run `python runapp.py` from root
-3. Generate dataset and create base prompts
+1. (Recommended) Create a virtual environment and install dependencies:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+2. Create `utils/.env` file with your API keys:
+```bash
+OPENAI_API_KEY=your_openai_api_key
+AWS_ACCESS_KEY_ID=your_aws_access_key  # If using AWS Bedrock
+AWS_SECRET_ACCESS_KEY=your_aws_secret_key  # If using AWS Bedrock
+AWS_DEFAULT_REGION=your_aws_region  
+WANDB_API_KEY=your_wandb_api_key 
+```
+3. Run `python runapp.py` from root
+4. Generate dataset and create base prompts
     - From config panel select "Create Dataset" and go through all steps
     - From config panel select "Manage Prompts" and publish all defaults for every tab
-4. Run single test or whole evaluation
+5. Run single test or whole evaluation
 
 ## Use fine-tuned comparison model
 1. Based on your dataset fine-tune your comparison model in [this notebook](https://colab.research.google.com/drive/1zfhbL9KwUbbCcSvy46alJDCZY7TwSVIO?usp=sharing)
@@ -24,4 +48,3 @@ E2E Models + Weave demo. Also serves as the demo project for the EU AI Act.
     - Add ngrok address without the `v1`
     - Add random secret
 4. Open Playground and debug with the actual model
- 
