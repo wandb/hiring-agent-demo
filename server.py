@@ -108,12 +108,13 @@ class CompareApplicationOffer:
     @weave.op(name="CompareApplicationOfferCall")
     def __call__(self, state: GraphState):
         """Compare the application and offer and decide if they are fitting and why."""
+        # TODO: should wandb be used to track in inference? (would need to make work with weave parallel)
         # track inference
-        run = wandb.init(
-            project=wandb_project, 
-            entity=wandb_entity, 
-            job_type="inference"
-        )
+        # run = wandb.init(
+        #     project=wandb_project, 
+        #     entity=wandb_entity, 
+        #     job_type="inference"
+        # )
 
         state["tries"] = 1 if not state.get("tries") else state.get("tries")+1
         application_extract = state["application_extract"]
@@ -125,18 +126,21 @@ class CompareApplicationOffer:
                 response_format={"type": "json"}).with_structured_output(InterviewDecision)
         elif self.comparison_model.startswith("wandb-artifact:///"):
             # Extract model name from the artifact path
-            artifact_name = self.comparison_model.split("/")[-1]
-            model_name = artifact_name.split(":")[0]
+            #artifact_name = self.comparison_model.split("/")[-1]
+            #model_name = artifact_name.split(":")[0]
 
             # Use artifact without downloaded it for lineage
-            artifact = run.use_artifact(artifact_name)
+            #artifact = run.use_artifact(artifact_name)
 
-            # We can assume that model is already downloaded and added to Ollama
+            # check of model is already downloaded and added to Ollama
             model_name = "fine-tuned-comparison-model"
-            model = ChatOllama(
-                model=model_name,
-                format="json"
-            ).with_structured_output(InterviewDecision)
+            try:
+                model = ChatOllama(
+                    model=model_name,
+                    format="json"
+                ).with_structured_output(InterviewDecision)
+            except Exception as e:
+                print(f"Error loading model {model_name}: {e}")
         else:
             model = ChatBedrock(
                 model=self.comparison_model,
@@ -155,14 +159,14 @@ class CompareApplicationOffer:
         state["decision"] = decision.decision
 
 
-        run.log({
-            "decision": decision.decision,
-            "reason": decision.reason,
-            "job_offer_extract": job_offer_extract,
-            "application_extract": application_extract,
-            "comparison_document": comparison_document
-        })
-        run.finish()
+        # run.log({
+        #     "decision": decision.decision,
+        #     "reason": decision.reason,
+        #     "job_offer_extract": job_offer_extract,
+        #     "application_extract": application_extract,
+        #     "comparison_document": comparison_document
+        # })
+        # run.finish()
         return state
 
 class HallucinationGuardrail:
