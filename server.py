@@ -5,6 +5,7 @@ from weave.scorers.hallucination_scorer import HallucinationResponse
 from weave.trace.api import get_current_call
 from weave.trace import urls
 from weave.integrations.bedrock.bedrock_sdk import patch_client
+from weave.flow.annotation_spec import AnnotationSpec
 from langchain_openai import ChatOpenAI
 from langchain_aws import ChatBedrock
 from langchain_ollama import ChatOllama
@@ -346,6 +347,44 @@ def submit_expert_review(call_id, decision, reason):
 
         # Add emoji showing expert review
         call.feedback.add_reaction("👀")
+
+        spec1 = AnnotationSpec(
+            name="Expert Decision",
+            description="Expert hiring decisions and reasoning",
+            field_schema={
+                "type": "boolean",
+              #  "enum": ["True", "False"],
+            }
+            )
+        
+
+        spec2 = AnnotationSpec(
+            name="Expert Reason",
+            description="Expert reasoning for hiring decisions",
+            field_schema={
+                "type": "string",
+            }
+            )
+        
+        published_decision_spec = weave.publish(spec1, "expert_decision")
+        published_reason_spec = weave.publish(spec2, "expert_reason")
+
+        # Add feedback using the annotation spec
+        call.feedback.add(
+            feedback_type="wandb.annotation." + published_decision_spec.name,
+            payload={
+                "value": decision_bool,
+            },
+            annotation_ref=published_decision_spec.uri()
+        )
+
+        call.feedback.add(
+            feedback_type="wandb.annotation." + published_reason_spec.name,
+            payload={
+                "value": reason,
+            },
+            annotation_ref=published_reason_spec.uri()
+        )
         
         # Log to W&B for additional tracking
         run = wandb.init(
