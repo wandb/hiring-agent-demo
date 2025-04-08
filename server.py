@@ -110,8 +110,8 @@ class CompareApplicationOffer:
         """Compare the application and offer and decide if they are fitting and why."""
         # track inference
         run = wandb.init(
-            project=st.session_state.wandb_project, 
-            entity=st.session_state.wandb_entity, 
+            project=wandb_project, 
+            entity=wandb_entity, 
             job_type="inference"
         )
 
@@ -179,7 +179,7 @@ class HallucinationGuardrail:
         )
         decision_reason = "Decision: We should move on with an interview\n" if state["decision"] else "Decision: We should NOT move on with an interview\n"
         decision_reason += f"Reason: {state['reason']}"
-        latest_context_prompt = weave.ref("weave:///wandb-smle/e2e-hiring-assistant/object/context_prompt:latest").get()
+        latest_context_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/context_prompt:latest").get()
         context_document = latest_context_prompt.format(
             job_offer_extract=job_offer_extract,
             application_extract=application_extract
@@ -225,6 +225,20 @@ def validate(state: GraphState) -> str:
     has_hallucination = state["has_hallucination"]
     if has_hallucination == True and state["tries"] < 2:
         print("---DECISION: Hallucination detected, will retry---")
+        # Get call from streamlit session state if it exists, otherwise get current call
+        if st.session_state.call_id_to_annotate:
+            call = client.get_call(st.session_state.call_id_to_annotate)
+            print(f"Found call {call.id} in streamlit session state")
+        else:
+            call = get_current_call()
+            print(f"Found call {call.id} in current call")
+        
+        # Add feedback if we have a valid call
+        if call:
+            call.feedback.add_reaction("🤖")
+        else:
+            st.error("Could not find a valid call to add feedback to")
+
         return "retry"
     elif has_hallucination == True and state["tries"] >= 2:
         print("---DECISION: Hallucination detected, too many retries, marking for expert review---")
@@ -622,6 +636,11 @@ class HiringAgent(weave.Model):
     def predict(self, offer_pdf: str, application_pdf: str,
                 offer_images: Optional[Union[List[Image.Image], Image.Image]] = None,
                 application_images: Optional[Union[List[Image.Image], Image.Image]] = None) -> dict:
+        # Get the parent call to add annotations later
+        parent_call = get_current_call()
+        if parent_call:
+            st.session_state.call_id_to_annotate = parent_call.id
+        
         # extraction
         result = stream_graph_updates(self._app, offer_pdf, application_pdf)
         return result
@@ -713,8 +732,15 @@ def validate_api_keys(comparison_model):
         
         if not any(key in missing_keys for key in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]):
             try:
-                boto3.client("bedrock-runtime").list_foundation_models()
-            except Exception:
+                boto3.client(
+                    service_name="bedrock-runtime",
+                    region_name=os.environ["AWS_DEFAULT_REGION"],
+                    aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+                    aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+                    aws_session_token=os.environ["AWS_SESSION_TOKEN"],
+                )
+            except Exception as e:
+                print(f"Error initializing bedrock: {e}")
                 invalid_keys.extend(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"])
     
     return missing_keys, invalid_keys
@@ -757,7 +783,7 @@ if __name__ == "__main__":
         st.subheader("W&B Configuration")
         # Default entity and project from environment variables or hardcoded defaults
         default_entity = os.environ.get("WANDB_ENTITY", "wandb-smle")
-        default_project = os.environ.get("WANDB_PROJECT", "e2e-hiring-assistant")
+        default_project = os.environ.get("WANDB_PROJECT", "e2e-hiring-assistant-test")
 
         wandb_entity = st.text_input("W&B Entity", value=default_entity, help="Your W&B entity/username")
         wandb_project = st.text_input("W&B Project", value=default_project, help="Your W&B project name")
@@ -777,7 +803,8 @@ if __name__ == "__main__":
             "Comparison Model", 
             openai_models+[
                 "us.anthropic.claude-3-5-sonnet-20241022-v2:0", 
-                "us.amazon.nova-lite-v1:0"
+                "us.amazon.nova-lite-v1:0",
+                "custom-wandb-artifact-model"
             ]
         )
         
@@ -804,7 +831,7 @@ if __name__ == "__main__":
         if comparison_model not in openai_models and not comparison_model.startswith("wandb-artifact:///"):
             boto_client = boto3.client(
                 service_name="bedrock-runtime",
-                region_name="us-west-2",
+                region_name=os.environ["AWS_DEFAULT_REGION"],
                 aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
                 aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
                 aws_session_token=os.environ["AWS_SESSION_TOKEN"],
@@ -823,7 +850,7 @@ if __name__ == "__main__":
         add_model = st.button("+ Add Model to Ollama")
         
         # If custom artifact is provided, use it instead
-        if custom_artifact:
+        if comparison_model == "custom-wandb-artifact-model" and custom_artifact:
             comparison_model = "wandb-artifact:///" + custom_artifact
             
             # Only check for Ollama if using a W&B artifact and the add button is clicked
@@ -1043,18 +1070,6 @@ if __name__ == "__main__":
                         
                         st.subheader("Reasoning")
                         st.write(result['reason'])
-
-                        # Get the call ID
-                        call_id = st.session_state.call_id_to_annotate
-
-                        # Verify we have the data we need
-                        if call_id:
-                            # Get the call by ID
-                            call = client.get_call(call_id)
-                            call.feedback.add_reaction("🤖")
-                        
-                        else:
-                            st.error("Missing call ID")
 
                     # Cleanup
                     os.remove("temp_offer.pdf")
