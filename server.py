@@ -622,7 +622,11 @@ class HiringAgent(weave.Model):
             self._comparison_client = ChatOllama(
                 model="fine-tuned-comparison-model",
                 format="json",
-            ).with_structured_output(InterviewDecision) 
+                num_predict=2500,  # Maximum tokens to generate (default: 128)
+                #temperature=0.2,   # Lower temperature for more deterministic outputs
+                repeat_penalty=1.5,  # Higher penalty to avoid repetition loops
+                stop=["}"]         # Stop token to help ensure JSON completion
+            ).with_structured_output(InterviewDecision)
         else:
             self._comparison_client = ChatBedrock(
                 model=self.comparison_model, 
