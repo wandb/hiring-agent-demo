@@ -88,3 +88,4 @@ urllib3==2.3.0
 wandb==0.19.9
 weave==0.51.41
 xxhash==3.5.0
+nest-asyncio==1.6.0

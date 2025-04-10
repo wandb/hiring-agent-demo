@@ -16,7 +16,8 @@ from openai import OpenAI
 
 import boto3
 import os, sys, json, subprocess, shutil
-import asyncio, uuid
+import asyncio, uuid, nest_asyncio
+
 from PIL import Image
 from typing import Optional, List, Any, Union
 from typing_extensions import TypedDict
@@ -27,6 +28,10 @@ import pandas as pd
 import numpy as np
 import wandb
 import time
+import resource
+import openai
+import botocore
+from langchain_core.exceptions import LangChainException
 
 from utils.prompt import (
     CV, Offer, InterviewDecision, 
@@ -36,6 +41,9 @@ from utils.prepro import extract_text_from_pdf, pdf_to_images, pre_process_eval
 from utils.evaluate import decision_match, ReasonScorer
 from utils.generate import generate_dataset, generate_applicant_characteristics, calculate_r_score, generate_application_from_characteristics
 from dotenv import load_dotenv
+
+# Apply nest_asyncio at the module level to allow nested event loops
+nest_asyncio.apply()
 
 # Initialize Streamlit session state variables
 if 'thread_config' not in st.session_state:
@@ -56,9 +64,6 @@ if 'application_extract' not in st.session_state:
 # possible models
 openai_models = ["gpt-4o-mini", "gpt-4o"]
 
-# TODO: change last_comparison to take in a weave call object
-# TODO: check difference between pydantic structured outcome defintion and custom prompts
-# TODO: check whether better to define the nodes as classes with args (instead of partials) 
 # Define the data model for the graph state
 class GraphState(TypedDict):
     offer_pdf: str
@@ -72,38 +77,38 @@ class GraphState(TypedDict):
     last_comparison: Any
 
 class ExtractJobOffer:
-    def __init__(self, extraction_model) -> None:
-        self.extraction_model = extraction_model
+    def __init__(self, extraction_client) -> None:
+        self.extraction_client = extraction_client
 
     @weave.op(name="ExtractJobOfferCall")
     def __call__(self, state: GraphState):
         """Extract the information from the job offer"""
+        
         job_offer = extract_text_from_pdf(state["offer_pdf"])
-        model = ChatOpenAI(model=self.extraction_model)
-        # Use wandb_entity and wandb_project from global scope
+            
         latest_offer_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_offer_prompt:latest").get()
-        job_offer_extract = model.invoke(latest_offer_prompt.format(job_offer=job_offer))
+        job_offer_extract = self.extraction_client.invoke(latest_offer_prompt.format(job_offer=job_offer))
         state["job_offer_extract"] = job_offer_extract.content
         return state
-    
+
 class ExtractApplication:
-    def __init__(self, extraction_model) -> None:
-        self.extraction_model = extraction_model
+    def __init__(self, extraction_client) -> None:
+        self.extraction_client = extraction_client
 
     @weave.op(name="ExtractApplicationCall")
     def __call__(self, state: GraphState):
         """Extract the information from the application"""
+        
         application = extract_text_from_pdf(state["application_pdf"])
-        model = ChatOpenAI(model=self.extraction_model)
-        # Use wandb_entity and wandb_project from global scope
+            
         latest_application_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_application_prompt:latest").get()
-        application_extract = model.invoke(latest_application_prompt.format(application=application))
+        application_extract = self.extraction_client.invoke(latest_application_prompt.format(application=application))
         state["application_extract"] = application_extract.content
         return state
 
 class CompareApplicationOffer:
-    def __init__(self, comparison_model) -> None:
-        self.comparison_model = comparison_model
+    def __init__(self, comparison_client) -> None:
+        self.comparison_client = comparison_client
 
     @weave.op(name="CompareApplicationOfferCall")
     def __call__(self, state: GraphState):
@@ -120,41 +125,12 @@ class CompareApplicationOffer:
         application_extract = state["application_extract"]
         job_offer_extract = state["job_offer_extract"]
         
-        if self.comparison_model in openai_models:
-            model = ChatOpenAI(
-                model=self.comparison_model,
-                response_format={"type": "json"}).with_structured_output(InterviewDecision)
-        elif self.comparison_model.startswith("wandb-artifact:///"):
-            # Extract model name from the artifact path
-            #artifact_name = self.comparison_model.split("/")[-1]
-            #model_name = artifact_name.split(":")[0]
-
-            # Use artifact without downloaded it for lineage
-            #artifact = run.use_artifact(artifact_name)
-
-            # check of model is already downloaded and added to Ollama
-            model_name = "fine-tuned-comparison-model"
-            try:
-                model = ChatOllama(
-                    model=model_name,
-                    format="json"
-                ).with_structured_output(InterviewDecision)
-            except Exception as e:
-                print(f"Error loading model {model_name}: {e}")
-        else:
-            model = ChatBedrock(
-                model=self.comparison_model,
-                aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-                aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-                aws_session_token=os.environ["AWS_SESSION_TOKEN"]).with_structured_output(InterviewDecision)
-            
-        # Use wandb_entity and wandb_project from global scope
         latest_comparison_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/compare_offer_application_prompt:latest").get()
         comparison_document = latest_comparison_prompt.format(
             job_offer_extract=job_offer_extract, 
             application_extract=application_extract
         )
-        decision = model.invoke(comparison_document)
+        decision = self.comparison_client.invoke(comparison_document)
         state["reason"] = decision.reason
         state["decision"] = decision.decision
 
@@ -170,17 +146,15 @@ class CompareApplicationOffer:
         return state
 
 class HallucinationGuardrail:
-    def __init__(self, guardrail_model) -> None:
-        self.guardrail_model = guardrail_model
+    def __init__(self, guardrail_client) -> None:
+        self.guardrail_client = guardrail_client
 
     @weave.op(name="HallucinationGuardrail")
     def __call__(self, state: GraphState):
         """Use guardrail to check whether reason only contains info from application or offer"""
         application_extract = state["application_extract"]
         job_offer_extract = state["job_offer_extract"]
-        hallucination_scorer = HallucinationFreeScorer(
-            model_id=f"openai/{self.guardrail_model}",
-        )
+        
         decision_reason = "Decision: We should move on with an interview\n" if state["decision"] else "Decision: We should NOT move on with an interview\n"
         decision_reason += f"Reason: {state['reason']}"
         latest_context_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/context_prompt:latest").get()
@@ -189,15 +163,12 @@ class HallucinationGuardrail:
             application_extract=application_extract
         )
 
-        # NOTE: we want this to run sync to know what next to do
-        guardrail_result = asyncio.run(hallucination_scorer.score(output=decision_reason, context=context_document))
-
-        # TODO: Check postprocess_output, does that exist for Scorers, Evaluations?
-        # TODO: I could define a column map in the scorer to map the decision.reason to the "output" (not sure because it's only meant for dataset right)?
-        #       Still how do I get in the context_documents? I would need to retrieve them from the beginning of the whole trace? 
-        #       We need some mapping for the call object? Also what's the benefit of applying the score instead of calling .score? (the extra field in the UI?)
-        # guardrail_result = state["last_comparison"].apply_scorer(hallucination_scorer)
-
+        # With nest_asyncio already applied, we can safely use asyncio.run
+        guardrail_result = asyncio.run(self.guardrail_client.score(
+            output=decision_reason, 
+            context=context_document
+        ))
+        
         state["has_hallucination"] = guardrail_result["has_hallucination"]
         return state
 
@@ -252,18 +223,17 @@ def validate(state: GraphState) -> str:
         return "valid"
 
 def create_wf(
-        extraction_model: str,
-        comparison_model: str,
-        guardrail_model: str,
+        extraction_client,
+        comparison_client,
+        guardrail_client,
         hitl_always_on: bool,
         disable_expert_review: bool = False):
     # Define the nodes in the workflow
-    # Initialize the workflow
     workflow = StateGraph(GraphState)
-    workflow.add_node("extract_job_offer", ExtractJobOffer(extraction_model=extraction_model))
-    workflow.add_node("extract_application", ExtractApplication(extraction_model=extraction_model))
-    workflow.add_node("compare_application_offer", CompareApplicationOffer(comparison_model=comparison_model))
-    workflow.add_node("hallucination_guardrail", HallucinationGuardrail(guardrail_model=guardrail_model))
+    workflow.add_node("extract_job_offer", ExtractJobOffer(extraction_client=extraction_client))
+    workflow.add_node("extract_application", ExtractApplication(extraction_client=extraction_client))
+    workflow.add_node("compare_application_offer", CompareApplicationOffer(comparison_client=comparison_client))
+    workflow.add_node("hallucination_guardrail", HallucinationGuardrail(guardrail_client=guardrail_client))
     workflow.add_node("expert_review", expert_review)
 
     # Start from 'generate_application' step
@@ -275,7 +245,16 @@ def create_wf(
     # Configure the flow based on expert review settings
     if disable_expert_review:
         # Never use expert review, even for hallucinations
-        workflow.add_edge("hallucination_guardrail", END)
+        # But still use retry logic for hallucinations
+        workflow.add_conditional_edges(
+            "hallucination_guardrail",
+            validate,
+            {
+                "retry": "compare_application_offer",
+                "expert_review": END,  # Skip expert review but keep retry
+                "valid": END,
+            },
+        )
     elif hitl_always_on:
         # Always use expert review
         workflow.add_edge("hallucination_guardrail", "expert_review")
@@ -625,16 +604,45 @@ class HiringAgent(weave.Model):
     hitl_always_on: bool = False
     disable_expert_review: bool = False
     _app : Any = PrivateAttr()
+    _extraction_client = PrivateAttr()
+    _comparison_client = PrivateAttr()
+    _guardrail_client = PrivateAttr()
 
     # Start streaming the graph updates using job_offer and cv as inputs
     def model_post_init(self, __context):
+        # Initialize clients once and reuse
+        self._extraction_client = ChatOpenAI(model=self.extraction_model, max_retries=5)
+        
+        if self.comparison_model in openai_models:
+            self._comparison_client = ChatOpenAI(
+                model=self.comparison_model,
+                response_format={"type": "json"},
+            ).with_structured_output(InterviewDecision)
+        elif self.comparison_model.startswith("wandb-artifact:///"):
+            self._comparison_client = ChatOllama(
+                model="fine-tuned-comparison-model",
+                format="json",
+            ).with_structured_output(InterviewDecision) 
+        else:
+            self._comparison_client = ChatBedrock(
+                model=self.comparison_model, 
+                aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+                aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+                aws_session_token=os.environ["AWS_SESSION_TOKEN"]
+            ).with_structured_output(InterviewDecision)
+                
+        # Initialize hallucination scorer client
+        self._guardrail_client = HallucinationFreeScorer(
+            model_id=f"openai/{self.guardrail_model}"
+        )
+                
         self._app = create_wf(
-            self.extraction_model, 
-            self.comparison_model, 
-            self.guardrail_model, 
+            self._extraction_client, 
+            self._comparison_client,
+            self._guardrail_client,
             self.hitl_always_on,
             self.disable_expert_review
-        ) 
+        )
 
     @weave.op
     def predict(self, offer_pdf: str, application_pdf: str,
@@ -649,6 +657,14 @@ class HiringAgent(weave.Model):
         result = stream_graph_updates(self._app, offer_pdf, application_pdf)
         return result
     
+    # Add cleanup method
+    def cleanup(self):
+        # Close any clients that have close methods
+        for client_attr in ['_extraction_client', '_comparison_client', '_guardrail_client']:
+            client = getattr(self, client_attr, None)
+            if client and hasattr(client, 'close'):
+                client.close()
+
 # Initialize session state for form handling
 if 'form_submitted' not in st.session_state:
     st.session_state.form_submitted = False
@@ -920,6 +936,52 @@ if __name__ == "__main__":
         st.subheader("Evaluation Settings")
         judge_model = st.selectbox("Judge Model", ["gpt-4o-mini", "gpt-4o"])
 
+        # Add Performance Settings section
+        st.subheader("Performance Settings")
+        
+        # Get current WEAVE_PARALLELISM value or default to 1
+        current_parallelism = os.environ.get("WEAVE_PARALLELISM", "1")
+        
+        # Add number input widget for WEAVE_PARALLELISM
+        weave_parallelism = st.number_input(
+            "Weave Parallelism", 
+            min_value=1, 
+            max_value=16, 
+            value=int(current_parallelism),
+            help="Controls how many operations Weave can run in parallel. Lower values reduce file handle usage."
+        )
+        
+        # Set environment variable based on user input
+        os.environ["WEAVE_PARALLELISM"] = str(weave_parallelism)
+        
+        # Show info about current setting
+        if weave_parallelism <= 2:
+            st.info("Low parallelism: Reduces 'Too many open files' errors but may be slower")
+        elif weave_parallelism >= 8:
+            st.warning("High parallelism: Faster but may cause 'Too many open files' errors on large datasets")
+
+        # Add system ulimit control
+        st.subheader("System Resource Settings")
+        
+        # Add a button to increase system file limit
+        if st.button("Increase System File Limit"):
+            try:
+                # Try to set higher soft limit for the current process (works on Unix systems)
+                soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+                resource.setrlimit(resource.RLIMIT_NOFILE, (min(soft * 2, hard), hard))
+                new_soft, new_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+                st.success(f"Increased file limit from {soft} to {new_soft} (max: {hard})")
+            except Exception as e:
+                st.error(f"Failed to increase file limit: {str(e)}")
+                st.info("Try running 'ulimit -n 4096' in your terminal before starting the app")
+        
+        # Display current file limit information
+        try:
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            st.info(f"Current file limit: {soft} (max: {hard})")
+        except:
+            st.info("File limit information not available")
+
     # Initialize agent with selected configuration
     hiring_agent = HiringAgent(
         extraction_model=extraction_model,
@@ -1083,9 +1145,24 @@ if __name__ == "__main__":
         st.header("Batch Evaluation")
         dataset_ref = st.text_input(
             "Dataset Reference", 
-            f"weave:///{wandb_entity}/{wandb_project}/object/evaluation_dataset:rERmeHPF4pmNYpTbAayZyFAr3oEzZlhYyVXyhPDI48w",
+            f"weave:///{wandb_entity}/{wandb_project}/object/evaluation_dataset:latest",
         )
         trials = st.number_input("Number of Trials", min_value=1, value=1)
+        
+        # Automatically disable expert review for batch testing
+        disable_expert_review = True
+        
+        # Update the hiring agent with expert review disabled for batch testing
+        hiring_agent = HiringAgent(
+            extraction_model=extraction_model,
+            comparison_model=comparison_model,
+            guardrail_model=guardrail_model,
+            hitl_always_on=False,
+            disable_expert_review=disable_expert_review
+        )
+        
+        # Show information about expert review mode
+        st.info("Expert review is automatically disabled during batch testing, but retry logic remains active.")
         
         if st.button("Run Evaluation"):
             with st.spinner("Running batch evaluation..."):
