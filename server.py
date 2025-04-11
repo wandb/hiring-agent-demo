@@ -619,8 +619,16 @@ class HiringAgent(weave.Model):
                 response_format={"type": "json"},
             ).with_structured_output(InterviewDecision)
         elif self.comparison_model.startswith("wandb-artifact:///"):
+            # Set Ollama parallelism to match Weave parallelism
+            weave_parallelism = int(os.environ.get("WEAVE_PARALLELISM", "1"))
+            os.environ["OLLAMA_NUM_PARALLEL"] = str(weave_parallelism)
+            
+            # Extract full artifact path and convert to Ollama-compatible name
+            full_artifact_path = self.comparison_model.replace("wandb-artifact:///", "")
+            model_name = full_artifact_path.replace("/", "-").replace(":", "-")
+            
             self._comparison_client = ChatOllama(
-                model="fine-tuned-comparison-model",
+                model=model_name,
                 format="json",
                 num_predict=2500,  # Maximum tokens to generate (default: 128)
                 #temperature=0.2,   # Lower temperature for more deterministic outputs
@@ -879,9 +887,10 @@ if __name__ == "__main__":
             
             # Only check for Ollama if using a W&B artifact and the add button is clicked
             if add_model:
-                # Extract model name from the artifact path
-                artifact_name = comparison_model.split("/")[-1]
-                model_name = artifact_name.split(":")[0]
+                # Extract full artifact path (without the wandb-artifact:/// prefix)
+                full_artifact_path = comparison_model.replace("wandb-artifact:///", "")
+                # Convert to Ollama-compatible name (replace / and : with -)
+                model_name = full_artifact_path.replace("/", "-").replace(":", "-")
                 
                 # Create local_models directory if it doesn't exist
                 local_models_dir = "local_models"
