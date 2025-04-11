@@ -107,24 +107,25 @@ class ReasonScorer(Scorer):
         Returns:
             Dictionary with aggregated reason matching metrics
         """
-        # Extract match scores (assuming reason_match contains a score field)
-        # Note: This depends on the structure of the ReasonComparison class
+        # Extract match scores (based on the ReasonComparison class structure which has reasons_match field)
         match_scores = []
         for row in score_rows:
-            if isinstance(row['reason_match'], dict) and 'score' in row['reason_match']:
-                match_scores.append(row['reason_match']['score'])
-            elif hasattr(row['reason_match'], 'score'):
-                match_scores.append(row['reason_match'].score)
+            if isinstance(row['reason_match'], dict) and 'reasons_match' in row['reason_match']:
+                # Convert boolean to numeric score (1.0 for True, 0.0 for False)
+                match_scores.append(1.0 if row['reason_match']['reasons_match'] else 0.0)
+            elif hasattr(row['reason_match'], 'reasons_match'):
+                # Convert boolean to numeric score
+                match_scores.append(1.0 if row['reason_match'].reasons_match else 0.0)
             else:
-                # If score is not available, try to use a default value or skip
-                match_scores.append(0)
+                # If reasons_match is not available, use default value
+                match_scores.append(0.0)
                 
         # Calculate aggregate statistics
         avg_match_score = sum(match_scores) / len(match_scores) if match_scores else 0
         max_score = max(match_scores) if match_scores else 0
         min_score = min(match_scores) if match_scores else 0
         
-        # Count perfect matches (assuming score of 1.0 means perfect match)
+        # Count perfect matches (score of 1.0 means perfect match)
         perfect_matches = sum(1 for score in match_scores if score >= 0.9)
         perfect_match_rate = perfect_matches / len(match_scores) if match_scores else 0
         
