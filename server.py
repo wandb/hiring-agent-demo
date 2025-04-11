@@ -76,6 +76,25 @@ class GraphState(TypedDict):
     tries: int
     last_comparison: Any
 
+@weave.op
+def reset_state(state: GraphState) -> GraphState:
+    """Reset the state's counter fields to ensure a fresh start for each prediction."""
+    # Create a new state dictionary with initial values
+    # Keep the input PDFs but reset all other values
+    reset_state = {
+        "offer_pdf": state.get("offer_pdf", ""),
+        "application_pdf": state.get("application_pdf", ""),
+        "job_offer_extract": "",
+        "application_extract": "",
+        "reason": "",
+        "has_hallucination": False,
+        "decision": False,
+        "tries": 0,  # Explicitly reset the tries counter
+        "last_comparison": None
+    }
+    print("State has been reset for new prediction")
+    return reset_state
+
 class ExtractJobOffer:
     def __init__(self, extraction_client) -> None:
         self.extraction_client = extraction_client
@@ -230,14 +249,18 @@ def create_wf(
         disable_expert_review: bool = False):
     # Define the nodes in the workflow
     workflow = StateGraph(GraphState)
+    
+    # Add a reset state node at the beginning
+    workflow.add_node("reset_state", reset_state)
     workflow.add_node("extract_job_offer", ExtractJobOffer(extraction_client=extraction_client))
     workflow.add_node("extract_application", ExtractApplication(extraction_client=extraction_client))
     workflow.add_node("compare_application_offer", CompareApplicationOffer(comparison_client=comparison_client))
     workflow.add_node("hallucination_guardrail", HallucinationGuardrail(guardrail_client=guardrail_client))
     workflow.add_node("expert_review", expert_review)
 
-    # Start from 'generate_application' step
-    workflow.add_edge(START, "extract_job_offer")
+    # Start from 'reset_state' step
+    workflow.add_edge(START, "reset_state")
+    workflow.add_edge("reset_state", "extract_job_offer")
     workflow.add_edge("extract_job_offer", "extract_application")
     workflow.add_edge("extract_application", "compare_application_offer")
     workflow.add_edge("compare_application_offer", "hallucination_guardrail")
@@ -521,9 +544,10 @@ def streamlit_expert_panel():
 
 # Update stream_graph_updates to set waiting_for_review flag
 def stream_graph_updates(app, offer_pdf: str, application_pdf: str):
-    # Set up a thread ID for the graph
-    if "thread_config" not in st.session_state:
-        st.session_state.thread_config = {"configurable": {"thread_id": uuid.uuid4()}}
+    # Generate a new thread ID for each graph run to ensure fresh state
+    thread_config = {"configurable": {"thread_id": uuid.uuid4()}}
+    st.session_state.thread_config = thread_config
+    print(f"Generated new thread ID: {thread_config['configurable']['thread_id']}")
 
     # Start a new event loop
     result = {}
@@ -531,7 +555,7 @@ def stream_graph_updates(app, offer_pdf: str, application_pdf: str):
     
     try:
         # Execute the prediction
-        for event in app.stream({"offer_pdf": offer_pdf, "application_pdf": application_pdf}, config=st.session_state.thread_config):
+        for event in app.stream({"offer_pdf": offer_pdf, "application_pdf": application_pdf}, config=thread_config):
             for key, value in event.items():
                 if key != "__interrupt__":  # Ignore any interrupt events
                     print(f"Event: {key}")
@@ -665,7 +689,8 @@ class HiringAgent(weave.Model):
         if parent_call:
             st.session_state.call_id_to_annotate = parent_call.id
         
-        # extraction
+        # We'll use the existing workflow instance but with a unique thread_id
+        # to ensure state isolation between runs
         result = stream_graph_updates(self._app, offer_pdf, application_pdf)
         return result
     
