@@ -1159,6 +1159,7 @@ if __name__ == "__main__":
         dataset_ref = st.text_input(
             "Dataset Reference", 
             f"weave:///{wandb_entity}/{wandb_project}/object/evaluation_dataset:latest",
+            help="Use the evaluation dataset, not the finetuning dataset"
         )
         trials = st.number_input("Number of Trials", min_value=1, value=1)
         
@@ -1394,6 +1395,10 @@ if __name__ == "__main__":
             # Generation model selection
             generation_model = st.selectbox("Generation Model", openai_models, key="generation_model_step3")
             
+            # Add split ratio control
+            split_ratio = st.slider("Train/Eval Split Ratio", min_value=0.5, max_value=0.9, value=0.8, step=0.05,
+                                help="Percentage of data to use for fine-tuning dataset", key="split_ratio_step3")
+            
             # Show R score threshold control
             r_threshold = st.slider("R Score Threshold", min_value=0.0, max_value=1.0, value=0.6, step=0.05,
                                 help="Minimum acceptable R score to proceed with generation", key="r_threshold_step3")
@@ -1433,50 +1438,112 @@ if __name__ == "__main__":
                         # Convert to rows for Weave dataset
                         rows = [example.model_dump() for example in dataset_struct.examples]
                         
-                        # Create and publish Weave dataset
-                        dataset = weave.Dataset(name="evaluation_dataset", rows=rows)
-                        weave_ref = weave.publish(dataset)
-                        weave_url = urls.object_version_path(
-                            weave_ref.entity,
-                            weave_ref.project,
-                            weave_ref.name,
-                            weave_ref.digest,
+                        # Split the rows into training and evaluation sets
+                        import random
+                        random.shuffle(rows)
+                        split_idx = int(len(rows) * split_ratio)
+                        training_rows = rows[:split_idx]
+                        evaluation_rows = rows[split_idx:]
+                        
+                        # Create and publish training Weave dataset
+                        training_dataset = weave.Dataset(name="finetuning_dataset", rows=training_rows)
+                        training_ref = weave.publish(training_dataset)
+                        training_url = urls.object_version_path(
+                            training_ref.entity,
+                            training_ref.project,
+                            training_ref.name,
+                            training_ref.digest,
                         )
                         
-                        # Create a wandb.Table from the dataset rows
+                        # Create and publish evaluation Weave dataset
+                        evaluation_dataset = weave.Dataset(name="evaluation_dataset", rows=evaluation_rows)
+                        evaluation_ref = weave.publish(evaluation_dataset)
+                        evaluation_url = urls.object_version_path(
+                            evaluation_ref.entity,
+                            evaluation_ref.project,
+                            evaluation_ref.name,
+                            evaluation_ref.digest,
+                        )
+                        
+                        # Create wandb.Tables from the dataset rows
                         columns = list(rows[0].keys()) if rows else []
-                        table = wandb.Table(columns=columns)
-                        for row in rows:
-                            table.add_data(*[row[col] for col in columns])
                         
-                        # Create and log artifact with the table
-                        artifact = wandb.Artifact(
-                            name="evaluation_dataset",
+                        # Training table
+                        training_table = wandb.Table(columns=columns)
+                        for row in training_rows:
+                            training_table.add_data(*[row[col] for col in columns])
+                        
+                        # Evaluation table
+                        evaluation_table = wandb.Table(columns=columns)
+                        for row in evaluation_rows:
+                            evaluation_table.add_data(*[row[col] for col in columns])
+                        
+                        # Create and log training artifact
+                        training_artifact = wandb.Artifact(
+                            name="finetuning_dataset",
                             type="dataset",
-                            description="Generated applications based on characteristics"
+                            description="Generated applications for fine-tuning"
                         )
-                        artifact.add(table, "evaluation_dataset")
+                        training_artifact.add(training_table, "finetuning_dataset")
                         
-                        # Add metadata
-                        artifact.metadata = {
+                        # Add metadata to training artifact
+                        training_artifact.metadata = {
                             "r_score": r_score,
-                            "num_examples": len(rows),
-                            "positive_examples": sum(row["interview"] for row in rows),
-                            "negative_examples": sum(not row["interview"] for row in rows),
-                            "weave_reference": weave_url,
-                            "characteristics_source": characteristics_artifact_path
+                            "num_examples": len(training_rows),
+                            "positive_examples": sum(row["interview"] for row in training_rows),
+                            "negative_examples": sum(not row["interview"] for row in training_rows),
+                            "weave_reference": training_url,
+                            "characteristics_source": characteristics_artifact_path,
+                            "split_ratio": split_ratio
                         }
                         
-                        # Log artifact
-                        run.log_artifact(artifact)
+                        # Create and log evaluation artifact
+                        evaluation_artifact = wandb.Artifact(
+                            name="evaluation_dataset",
+                            type="dataset",
+                            description="Generated applications for evaluation"
+                        )
+                        evaluation_artifact.add(evaluation_table, "evaluation_dataset")
+                        
+                        # Add metadata to evaluation artifact
+                        evaluation_artifact.metadata = {
+                            "r_score": r_score,
+                            "num_examples": len(evaluation_rows),
+                            "positive_examples": sum(row["interview"] for row in evaluation_rows),
+                            "negative_examples": sum(not row["interview"] for row in evaluation_rows),
+                            "weave_reference": evaluation_url,
+                            "characteristics_source": characteristics_artifact_path,
+                            "split_ratio": 1 - split_ratio
+                        }
+                        
+                        # Log artifacts
+                        run.log_artifact(training_artifact)
+                        run.log_artifact(evaluation_artifact)
                         
                         # Finish the run
                         wandb.finish()
                         
                         # Display success message with links
-                        st.success(f"Dataset created and published successfully!")
-                        st.markdown(f"[View Weave dataset]({weave_url})")
-                        st.markdown(f"[View W&B artifact](https://wandb.ai/{run.entity}/{run.project}/artifacts/{artifact.type}/{artifact.name}/v0)")
+                        st.success(f"Datasets created and published successfully!")
+                        
+                        # Create columns for displaying dataset info
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.subheader("Fine-tuning Dataset")
+                            st.markdown(f"[View Weave dataset]({training_url})")
+                            st.markdown(f"[View W&B artifact](https://wandb.ai/{run.entity}/{run.project}/artifacts/{training_artifact.type}/{training_artifact.name}/v0)")
+                            st.metric("Examples", len(training_rows))
+                            st.metric("Positive Examples", sum(row["interview"] for row in training_rows))
+                            st.metric("Negative Examples", sum(not row["interview"] for row in training_rows))
+                        
+                        with col2:
+                            st.subheader("Evaluation Dataset")
+                            st.markdown(f"[View Weave dataset]({evaluation_url})")
+                            st.markdown(f"[View W&B artifact](https://wandb.ai/{run.entity}/{run.project}/artifacts/{evaluation_artifact.type}/{evaluation_artifact.name}/v0)")
+                            st.metric("Examples", len(evaluation_rows))
+                            st.metric("Positive Examples", sum(row["interview"] for row in evaluation_rows))
+                            st.metric("Negative Examples", sum(not row["interview"] for row in evaluation_rows))
                         
                         # Display sample of generated applications
                         st.subheader("Sample of Generated Applications")
