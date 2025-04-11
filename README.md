@@ -12,7 +12,7 @@ This repository contains a demo of a hiring agent that can evaluate job applicat
 - Integration with Weights & Biases Models and Weave
 
 ## Usage
-Once the operator UI is launched through streamlit there are four modes that can be select through the dropdown menu under "Select Mode". If you create a new project make sure to **execute them chronologically**: 
+Once the operator UI is launched through streamlit there are four modes that can be select through the dropdown menu under "Select Mode". It is important to note currently the current pipeline expects local PDFs to make it more realistic, that means that the evaluation dataset contains paths to local PDF files. If you want to run an evaluation locally make sure to generate your own dataset first, specifically **execute the following steps chronologically chronologically**. : 
 1. `Create Dataset`
     - Drag in job positions as PDFs (e.g. downloading wandb job positions)
     - Generate applicant characteristics table
