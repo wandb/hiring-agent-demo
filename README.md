@@ -54,11 +54,11 @@ WANDB_API_KEY=your_wandb_api_key
 
 ## Use fine-tuned comparison model
 1. Based on your dataset fine-tune your comparison model in [this notebook](https://colab.research.google.com/drive/1zfhbL9KwUbbCcSvy46alJDCZY7TwSVIO?usp=sharing)
-2. Paste in artifact path into config panel and "Add Model to Ollama"
+2. Paste in artifact path into config panel, select `custom-wandb-artifact-model` under "Comparison Model" and click the button "Add Model to Ollama"
     - This will download the artifact from wandb
-    - Will then call `ollama create fine-tuned-comparison-model -f Modelfile` from the root of the downloaded artifact (where the fine-tuning notebook adds a Modelfile automatically)
-3. Now when you paste in the artifact link into the textfield it will always call the model with Ollama
-    - To use one of the other models remove all text from the textfield
+    - Will then call `ollama create <model-name> -f Modelfile` from the root of the downloaded artifact (where the fine-tuning notebook adds a Modelfile automatically)
+3. If you want to use parallel calls make sure to serve the ollama server with `OLLAMA_NUM_PARALLEL=<number-of-parallel-calls> ollama serve`
+4. Now when use the single evaluation or the batch testing mode with the model
 
 ## Set fine-tuned model as endpoint for Weave playground
 1. Make sure the model runs on Ollama (following above guide will suffice)
