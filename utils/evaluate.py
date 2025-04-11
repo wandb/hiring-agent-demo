@@ -16,7 +16,9 @@ class ReasonScorer(Scorer):
     @weave.op
     def score(self, reason: str, model_output: dict) -> dict:
         model = ChatOpenAI(
-            model=self.model_id, 
+            model=self.model_id,
+            max_retries=5,             # Built-in retry mechanism
+            request_timeout=60.0,      # Longer timeout
             response_format={"type": "json"}).with_structured_output(ReasonComparison)
         prompt = reason_comp_prompt.format(p1_reasoning=reason, p2_reasoning=model_output["reason"])
         reason_match = model.invoke(prompt)

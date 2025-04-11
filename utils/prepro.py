@@ -2,9 +2,53 @@ import os
 import weave
 import fitz  # PyMuPDF
 from PIL import Image
-from typing import Union, Any
+from typing import Union, Any, Callable, TypeVar
+import io
+import time
+import functools
+
+# Create a simple retry decorator for parallel Waeve evals
+# Define a return type variable for the decorator
+T = TypeVar('T')
+
+def simple_retry(max_attempts: int = 2, delay: float = 1.0) -> Callable:
+    """A simple retry decorator with fixed delay for file operations.
+    
+    Args:
+        max_attempts: Maximum number of retry attempts (default: 2)
+        delay: Delay between retries in seconds (default: 1.0)
+        
+    Returns:
+        Decorated function with retry logic
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except OSError as e:
+                    # Handle file limit errors
+                    if e.errno == 24 and attempt < max_attempts - 1:
+                        print(f"Too many open files. Waiting {delay}s before retry {attempt+1}/{max_attempts}")
+                        time.sleep(delay)
+                    else:
+                        raise
+                except Exception as e:
+                    if attempt < max_attempts - 1:
+                        print(f"Error in {func.__name__}: {str(e)}. Retrying in {delay}s ({attempt+1}/{max_attempts})")
+                        time.sleep(delay)
+                    else:
+                        print(f"Failed after {max_attempts} attempts: {str(e)}")
+                        raise
+            # This should never be reached due to the raise in the last iteration,
+            # but it's here for type checking completeness
+            raise RuntimeError(f"Unexpected end of retry loop in {func.__name__}")
+        return wrapper
+    return decorator
 
 @weave.op
+@simple_retry(max_attempts=2, delay=1.0)
 def pdf_to_images(pdf_path: str, single_img: bool = True) -> Union[list[Image.Image], Image.Image]:
     """Convert PDF pages to PIL Images.
     
@@ -14,21 +58,25 @@ def pdf_to_images(pdf_path: str, single_img: bool = True) -> Union[list[Image.Im
     Returns:
         List of PIL Images, one per page
     """
-    pdf_document = fitz.open(pdf_path)
     images = []
     
-    for page_num in range(pdf_document.page_count):
-        page = pdf_document[page_num]
-        pix = page.get_pixmap()
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        images.append(img)
-        
-    pdf_document.close()
-
-    # NOTE: return first image for better demo purposes (to see img in trace-table-view)
-    return images[0] if single_img else images
+    try:
+        with fitz.open(pdf_path) as pdf_document:
+            for page_number in range(len(pdf_document)):
+                page = pdf_document[page_number]
+                pixmap = page.get_pixmap()
+                img_data = pixmap.tobytes("ppm")
+                img = Image.open(io.BytesIO(img_data))
+                images.append(img)
+        # NOTE: return first image for better demo purposes (to see img in trace-table-view)
+        return images[0] if single_img else images
+    except Exception as e:
+        print(f"Failed to process PDF: {e}")
+        # Return empty list rather than raising exception for robustness
+        return []
 
 @weave.op
+@simple_retry(max_attempts=2, delay=1.0)
 def extract_text_from_pdf(pdf_path: str) -> str:
     """
     Extracts text from a PDF file.
@@ -49,6 +97,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     return text
 
 @weave.op
+@simple_retry(max_attempts=2, delay=1.0)
 def save_as_pdf(content, filename):
     # Unpack tuple if content is a tuple
     if isinstance(content, tuple):
