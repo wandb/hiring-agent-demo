@@ -38,7 +38,7 @@ from utils.prompt import (
     context_prompt, guardrail_prompt,
     extract_offer_prompt, extract_application_prompt, compare_offer_application_prompt)
 from utils.prepro import extract_text_from_pdf, pdf_to_images, pre_process_eval
-from utils.evaluate import decision_match, ReasonScorer
+from utils.evaluate import DecisionScorer, ReasonScorer
 from utils.generate import generate_dataset, generate_applicant_characteristics, calculate_r_score, generate_application_from_characteristics
 from dotenv import load_dotenv
 
@@ -1181,7 +1181,7 @@ if __name__ == "__main__":
             with st.spinner("Running batch evaluation..."):
                 benchmark = weave.Evaluation(
                     dataset=weave.ref(dataset_ref).get(),
-                    scorers=[decision_match, ReasonScorer(model_id=judge_model)],
+                    scorers=[DecisionScorer(), ReasonScorer(model_id=judge_model)],
                     # replaced lambda to work better with weave versioning
                     preprocess_model_input=pre_process_eval,
                     trials=trials
