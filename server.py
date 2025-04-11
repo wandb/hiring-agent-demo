@@ -1166,29 +1166,47 @@ if __name__ == "__main__":
         # Automatically disable expert review for batch testing
         disable_expert_review = True
         
-        # Update the hiring agent with expert review disabled for batch testing
-        hiring_agent = HiringAgent(
-            extraction_model=extraction_model,
-            comparison_model=comparison_model,
-            guardrail_model=guardrail_model,
-            hitl_always_on=False,
-            disable_expert_review=disable_expert_review
-        )
-        
         # Show information about expert review mode
         st.info("Expert review is automatically disabled during batch testing, but retry logic remains active.")
         
         if st.button("Run Evaluation"):
             with st.spinner("Running batch evaluation..."):
-                benchmark = weave.Evaluation(
-                    dataset=weave.ref(dataset_ref).get(),
-                    scorers=[DecisionScorer(), ReasonScorer(model_id=judge_model)],
-                    # replaced lambda to work better with weave versioning
-                    preprocess_model_input=pre_process_eval,
-                    trials=trials
-                )
-                results = asyncio.run(benchmark.evaluate(hiring_agent))
-                st.json(results)
+                try:
+                    # Create a dedicated batch agent only when running the evaluation
+                    # This avoids creating a separate agent just for configuration
+                    batch_hiring_agent = HiringAgent(
+                        extraction_model=extraction_model,
+                        comparison_model=comparison_model,
+                        guardrail_model=guardrail_model,
+                        hitl_always_on=False,
+                        disable_expert_review=True
+                    )
+                    
+                    benchmark = weave.Evaluation(
+                        dataset=weave.ref(dataset_ref).get(),
+                        scorers=[DecisionScorer(), ReasonScorer(model_id=judge_model)],
+                        # replaced lambda to work better with weave versioning
+                        preprocess_model_input=pre_process_eval,
+                        trials=trials
+                    )
+                    results = asyncio.run(benchmark.evaluate(batch_hiring_agent))
+                    st.json(results)
+                    
+                    # Explicitly clean up resources after batch testing
+                    st.info("Cleaning up resources...")
+                    batch_hiring_agent.cleanup()
+                    
+                    # Force garbage collection to release file descriptors
+                    import gc
+                    collected = gc.collect()
+                    st.info(f"Resource cleanup complete. Released {collected} objects.")
+                    
+                except Exception as e:
+                    st.error(f"Batch evaluation error: {str(e)}")
+                    # Still attempt cleanup if there was an error
+                    if 'batch_hiring_agent' in locals():
+                        batch_hiring_agent.cleanup()
+                        gc.collect()
     # Add this to the "Create Dataset" section in the main function
     else:  # Create Dataset
         st.header("Create Evaluation Dataset")
