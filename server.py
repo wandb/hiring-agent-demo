@@ -1333,7 +1333,126 @@ if __name__ == "__main__":
                     else:
                         st.warning(f"R Score: {r_score:.2f} - Poor representativeness, consider regenerating")
                     
-                    # Show detailed metrics
+                    # Create and log data quality plots using native wandb plots
+                    
+                    # 1. Gender Distribution
+                    gender_counts = df['gender'].value_counts().reset_index()
+                    gender_counts.columns = ['gender', 'count']
+                    gender_table = wandb.Table(dataframe=gender_counts)
+                    gender_plot = wandb.plot.bar(
+                        gender_table, 
+                        "gender", 
+                        "count", 
+                        title="Gender Distribution"
+                    )
+                    
+                    # 2. Age Distribution
+                    age_data = [[age] for age in df['age']]
+                    age_table = wandb.Table(data=age_data, columns=["age"])
+                    age_plot = wandb.plot.histogram(
+                        age_table, 
+                        "age", 
+                        title="Age Distribution"
+                    )
+                    
+                    # 3. Nationality Distribution
+                    nationality_counts = df['nationality'].value_counts().reset_index()
+                    nationality_counts.columns = ['nationality', 'count']
+                    nationality_table = wandb.Table(dataframe=nationality_counts)
+                    nationality_plot = wandb.plot.bar(
+                        nationality_table, 
+                        "nationality", 
+                        "count", 
+                        title="Nationality Distribution"
+                    )
+                    
+                    # 4. Positive/Negative Examples
+                    example_counts = df['is_positive'].map({True: "Positive", False: "Negative"}).value_counts().reset_index()
+                    example_counts.columns = ['decision', 'count']
+                    example_table = wandb.Table(dataframe=example_counts)
+                    example_plot = wandb.plot.bar(
+                        example_table, 
+                        "decision", 
+                        "count", 
+                        title="Positive/Negative Examples"
+                    )
+                    
+                    # 5. Education Distribution
+                    education_counts = df['education'].value_counts().reset_index()
+                    education_counts.columns = ['education', 'count']
+                    education_table = wandb.Table(dataframe=education_counts)
+                    education_plot = wandb.plot.bar(
+                        education_table, 
+                        "education", 
+                        "count", 
+                        title="Education Distribution"
+                    )
+                    
+                    # 6. Years of Experience Distribution
+                    experience_data = [[exp] for exp in df['years_experience']]
+                    experience_table = wandb.Table(data=experience_data, columns=["years_experience"])
+                    experience_plot = wandb.plot.histogram(
+                        experience_table, 
+                        "years_experience", 
+                        title="Years of Experience Distribution"
+                    )
+                    
+                    # 7. Quality Score Distribution
+                    quality_data = [[score] for score in df['quality_score']]
+                    quality_table = wandb.Table(data=quality_data, columns=["quality_score"])
+                    quality_plot = wandb.plot.histogram(
+                        quality_table, 
+                        "quality_score", 
+                        title="Quality Score Distribution"
+                    )
+                    
+                    # 8. Job Position Distribution
+                    position_counts = df['job_position'].value_counts().reset_index()
+                    position_counts.columns = ['job_position', 'count']
+                    position_table = wandb.Table(dataframe=position_counts)
+                    position_plot = wandb.plot.bar(
+                        position_table, 
+                        "job_position", 
+                        "count", 
+                        title="Job Position Distribution"
+                    )
+                    
+                    # 9. Age vs Experience Scatter Plot
+                    age_exp_data = [[row['age'], row['years_experience']] for _, row in df.iterrows()]
+                    age_exp_table = wandb.Table(data=age_exp_data, columns=["age", "years_experience"])
+                    age_exp_plot = wandb.plot.scatter(
+                        age_exp_table,
+                        "age",
+                        "years_experience",
+                        title="Age vs Experience"
+                    )
+                    
+                    # 10. Quality Score by Gender
+                    quality_by_gender = [[row['gender'], row['quality_score']] for _, row in df.iterrows()]
+                    quality_gender_table = wandb.Table(data=quality_by_gender, columns=["gender", "quality_score"])
+                    quality_gender_plot = wandb.plot.scatter(
+                        quality_gender_table,
+                        "gender",
+                        "quality_score",
+                        title="Quality Score by Gender"
+                    )
+                    
+                    # Log all plots to W&B
+                    wandb.log({
+                        "r_score": r_score,
+                        "gender_distribution": gender_plot,
+                        "age_distribution": age_plot,
+                        "nationality_distribution": nationality_plot,
+                        "example_distribution": example_plot,
+                        "education_distribution": education_plot,
+                        "experience_distribution": experience_plot,
+                        "quality_score_distribution": quality_plot,
+                        "job_position_distribution": position_plot,
+                        "age_vs_experience": age_exp_plot,
+                        "quality_score_by_gender": quality_gender_plot
+                    })
+                    
+                    # Show detailed metrics in Streamlit UI
                     st.subheader("Dataset Statistics")
                     col1, col2 = st.columns(2)
                     
@@ -1344,6 +1463,9 @@ if __name__ == "__main__":
                         st.write("Age Distribution")
                         hist_values = np.histogram(df['age'], bins=8, range=(25, 65))[0]
                         st.bar_chart(hist_values)
+                        
+                        st.write("Education Distribution")
+                        st.bar_chart(df['education'].value_counts())
                     
                     with col2:
                         st.write("Nationality Distribution")
@@ -1351,9 +1473,10 @@ if __name__ == "__main__":
                         
                         st.write("Positive/Negative Examples")
                         st.bar_chart(df['is_positive'].map({True: "Positive", False: "Negative"}).value_counts())
-                    
-                    # Log R score to W&B
-                    wandb.log({"r_score": r_score})
+                        
+                        st.write("Years of Experience")
+                        exp_values = np.histogram(df['years_experience'], bins=10)[0]
+                        st.bar_chart(exp_values)
                     
                     # Finish the run
                     wandb.finish()
