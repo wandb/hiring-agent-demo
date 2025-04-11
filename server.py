@@ -11,7 +11,6 @@ from langchain_aws import ChatBedrock
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import interrupt, Command
 from openai import OpenAI
 
 import boto3
@@ -48,8 +47,6 @@ nest_asyncio.apply()
 # Initialize Streamlit session state variables
 if 'thread_config' not in st.session_state:
     st.session_state.thread_config = {"configurable": {"thread_id": uuid.uuid4()}}
-if 'interrupt' not in st.session_state:
-    st.session_state.interrupt = False
 if 'reason' not in st.session_state:
     st.session_state.reason = ""
 if 'decision' not in st.session_state:
@@ -557,28 +554,27 @@ def stream_graph_updates(app, offer_pdf: str, application_pdf: str):
         # Execute the prediction
         for event in app.stream({"offer_pdf": offer_pdf, "application_pdf": application_pdf}, config=thread_config):
             for key, value in event.items():
-                if key != "__interrupt__":  # Ignore any interrupt events
-                    print(f"Event: {key}")
-                    if isinstance(value, dict):
-                        # Store results in session state
-                        reason = value.get("reason", "")
-                        decision = value.get("decision", "")
-                        has_hallucination = value.get("has_hallucination", "")
-                        job_offer_extract = value.get("job_offer_extract", "")
-                        application_extract = value.get("application_extract", "")
-                        
-                        st.session_state.reason = reason
-                        st.session_state.decision = decision
-                        st.session_state.has_hallucination = has_hallucination
-                        st.session_state.job_offer_extract = job_offer_extract
-                        st.session_state.application_extract = application_extract
-                        
-                        # Update the result dictionary
-                        result = {
-                            'interview': decision,
-                            'reason': reason,
-                            'has_hallucination': has_hallucination
-                        }
+                print(f"Event: {key}")
+                if isinstance(value, dict):
+                    # Store results in session state
+                    reason = value.get("reason", "")
+                    decision = value.get("decision", "")
+                    has_hallucination = value.get("has_hallucination", "")
+                    job_offer_extract = value.get("job_offer_extract", "")
+                    application_extract = value.get("application_extract", "")
+                    
+                    st.session_state.reason = reason
+                    st.session_state.decision = decision
+                    st.session_state.has_hallucination = has_hallucination
+                    st.session_state.job_offer_extract = job_offer_extract
+                    st.session_state.application_extract = application_extract
+                    
+                    # Update the result dictionary
+                    result = {
+                        'interview': decision,
+                        'reason': reason,
+                        'has_hallucination': has_hallucination
+                    }
         
         # Get the current call ID and save it
         print("Prediction complete - Getting current call ID...")
