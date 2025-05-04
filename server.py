@@ -59,7 +59,7 @@ if 'application_extract' not in st.session_state:
     st.session_state.application_extract = ""
 
 # possible models
-openai_models = ["gpt-4o-mini", "gpt-4o"]
+openai_models = ["gpt-4o-mini", "gpt-4o", "ft:gpt-3.5-turbo-0125:weights-biases::BQzTYeAk", "gpt-3.5-turbo-0125"]
 
 # Define the data model for the graph state
 class GraphState(TypedDict):
@@ -93,8 +93,10 @@ def reset_state(state: GraphState) -> GraphState:
     return reset_state
 
 class ExtractJobOffer:
-    def __init__(self, extraction_client) -> None:
+    def __init__(self, extraction_client, wandb_entity, wandb_project) -> None:
         self.extraction_client = extraction_client
+        self.wandb_entity = wandb_entity
+        self.wandb_project = wandb_project
 
     @weave.op(name="ExtractJobOfferCall")
     def __call__(self, state: GraphState):
@@ -102,14 +104,16 @@ class ExtractJobOffer:
         
         job_offer = extract_text_from_pdf(state["offer_pdf"])
             
-        latest_offer_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_offer_prompt:latest").get()
+        latest_offer_prompt = weave.ref(f"weave:///{self.wandb_entity}/{self.wandb_project}/object/extract_offer_prompt:latest").get()
         job_offer_extract = self.extraction_client.invoke(latest_offer_prompt.format(job_offer=job_offer))
         state["job_offer_extract"] = job_offer_extract.content
         return state
 
 class ExtractApplication:
-    def __init__(self, extraction_client) -> None:
+    def __init__(self, extraction_client, wandb_entity, wandb_project) -> None:
         self.extraction_client = extraction_client
+        self.wandb_entity = wandb_entity
+        self.wandb_project = wandb_project
 
     @weave.op(name="ExtractApplicationCall")
     def __call__(self, state: GraphState):
@@ -117,14 +121,16 @@ class ExtractApplication:
         
         application = extract_text_from_pdf(state["application_pdf"])
             
-        latest_application_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_application_prompt:latest").get()
+        latest_application_prompt = weave.ref(f"weave:///{self.wandb_entity}/{self.wandb_project}/object/extract_application_prompt:latest").get()
         application_extract = self.extraction_client.invoke(latest_application_prompt.format(application=application))
         state["application_extract"] = application_extract.content
         return state
 
 class CompareApplicationOffer:
-    def __init__(self, comparison_client) -> None:
+    def __init__(self, comparison_client, wandb_entity, wandb_project) -> None:
         self.comparison_client = comparison_client
+        self.wandb_entity = wandb_entity
+        self.wandb_project = wandb_project
 
     @weave.op(name="CompareApplicationOfferCall")
     def __call__(self, state: GraphState):
@@ -141,7 +147,7 @@ class CompareApplicationOffer:
         application_extract = state["application_extract"]
         job_offer_extract = state["job_offer_extract"]
         
-        latest_comparison_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/compare_offer_application_prompt:latest").get()
+        latest_comparison_prompt = weave.ref(f"weave:///{self.wandb_entity}/{self.wandb_project}/object/compare_offer_application_prompt:latest").get()
         comparison_document = latest_comparison_prompt.format(
             job_offer_extract=job_offer_extract, 
             application_extract=application_extract
@@ -162,8 +168,10 @@ class CompareApplicationOffer:
         return state
 
 class HallucinationGuardrail:
-    def __init__(self, guardrail_client) -> None:
+    def __init__(self, guardrail_client, wandb_entity, wandb_project) -> None:
         self.guardrail_client = guardrail_client
+        self.wandb_entity = wandb_entity
+        self.wandb_project = wandb_project
 
     @weave.op(name="HallucinationGuardrail")
     def __call__(self, state: GraphState):
@@ -173,17 +181,37 @@ class HallucinationGuardrail:
         
         decision_reason = "Decision: We should move on with an interview\n" if state["decision"] else "Decision: We should NOT move on with an interview\n"
         decision_reason += f"Reason: {state['reason']}"
-        latest_context_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/context_prompt:latest").get()
+        latest_context_prompt = weave.ref(f"weave:///{self.wandb_entity}/{self.wandb_project}/object/context_prompt:latest").get()
         context_document = latest_context_prompt.format(
             job_offer_extract=job_offer_extract,
             application_extract=application_extract
         )
 
-        # With nest_asyncio already applied, we can safely use asyncio.run
-        guardrail_result = asyncio.run(self.guardrail_client.score(
-            output=decision_reason, 
-            context=context_document
-        ))
+        # Create a new event loop if one doesn't exist in this thread
+        try:
+            # Try to get the current event loop
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # If there's no event loop in this thread, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        # Run the hallucination scorer using the loop
+        if loop.is_running():
+            # If the loop is already running (e.g., from nest_asyncio),
+            # we need to create a task and run it to completion
+            future = asyncio.ensure_future(self.guardrail_client.score(
+                output=decision_reason, 
+                context=context_document
+            ))
+            # Wait for the task to complete (this is safe with nest_asyncio)
+            guardrail_result = loop.run_until_complete(future)
+        else:
+            # If the loop is not running, we can use run_until_complete directly
+            guardrail_result = loop.run_until_complete(self.guardrail_client.score(
+                output=decision_reason, 
+                context=context_document
+            ))
         
         state["has_hallucination"] = guardrail_result["has_hallucination"]
         return state
@@ -243,16 +271,18 @@ def create_wf(
         comparison_client,
         guardrail_client,
         hitl_always_on: bool,
-        disable_expert_review: bool = False):
+        disable_expert_review: bool = False,
+        wandb_entity: str = "wandb-smle",
+        wandb_project: str = "e2e-hiring-assistant-test"):
     # Define the nodes in the workflow
     workflow = StateGraph(GraphState)
     
     # Add a reset state node at the beginning
     workflow.add_node("reset_state", reset_state)
-    workflow.add_node("extract_job_offer", ExtractJobOffer(extraction_client=extraction_client))
-    workflow.add_node("extract_application", ExtractApplication(extraction_client=extraction_client))
-    workflow.add_node("compare_application_offer", CompareApplicationOffer(comparison_client=comparison_client))
-    workflow.add_node("hallucination_guardrail", HallucinationGuardrail(guardrail_client=guardrail_client))
+    workflow.add_node("extract_job_offer", ExtractJobOffer(extraction_client=extraction_client, wandb_entity=wandb_entity, wandb_project=wandb_project))
+    workflow.add_node("extract_application", ExtractApplication(extraction_client=extraction_client, wandb_entity=wandb_entity, wandb_project=wandb_project))
+    workflow.add_node("compare_application_offer", CompareApplicationOffer(comparison_client=comparison_client, wandb_entity=wandb_entity, wandb_project=wandb_project))
+    workflow.add_node("hallucination_guardrail", HallucinationGuardrail(guardrail_client=guardrail_client, wandb_entity=wandb_entity, wandb_project=wandb_project))
     workflow.add_node("expert_review", expert_review)
 
     # Start from 'reset_state' step
@@ -623,6 +653,8 @@ class HiringAgent(weave.Model):
     guardrail_model: str
     hitl_always_on: bool = False
     disable_expert_review: bool = False
+    wandb_entity: str = "wandb-smle"
+    wandb_project: str = "e2e-hiring-assistant-test"
     _app : Any = PrivateAttr()
     _extraction_client = PrivateAttr()
     _comparison_client = PrivateAttr()
@@ -673,7 +705,9 @@ class HiringAgent(weave.Model):
             self._comparison_client,
             self._guardrail_client,
             self.hitl_always_on,
-            self.disable_expert_review
+            self.disable_expert_review,
+            self.wandb_entity,
+            self.wandb_project
         )
 
     @weave.op
