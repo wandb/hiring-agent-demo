@@ -162,26 +162,26 @@ Carefully analyze the extracted information from both the job application and th
 
 # Steps
 1. **Compare Applicant Details and Job Preferences**:
-   - Verify if the applicant’s desired role matches the offered position.
-   - Check if the applicant’s preferred work location aligns with the job’s location or remote/hybrid options.
-   - Confirm if the applicant’s expected salary aligns with the offered compensation.
-   - Evaluate the alignment of the applicant’s availability/start date with the job’s start date.
+   - Verify if the applicant's desired role matches the offered position.
+   - Check if the applicant's preferred work location aligns with the job's location or remote/hybrid options.
+   - Confirm if the applicant's expected salary aligns with the offered compensation.
+   - Evaluate the alignment of the applicant's availability/start date with the job's start date.
 
 2. **Compare Qualifications**:
-   - Match the applicant’s educational background and certifications to the qualifications required or preferred in the job offer.
-   - Identify any additional qualifications in the application that exceed or fall short of the job’s requirements.
+   - Match the applicant's educational background and certifications to the qualifications required or preferred in the job offer.
+   - Identify any additional qualifications in the application that exceed or fall short of the job's requirements.
 
 3. **Compare Professional Experience**:
-   - Assess whether the applicant’s past roles and responsibilities align with the key responsibilities of the offered role.
+   - Assess whether the applicant's past roles and responsibilities align with the key responsibilities of the offered role.
    - Highlight any relevant projects, achievements, or skills from the application that directly align with the job offer.
 
 4. **Compare Career Objectives**:
-   - Evaluate how the applicant’s stated career goals align with the growth opportunities or objectives outlined in the job offer.
-   - Note any areas where the applicant’s goals diverge from the role’s focus.
+   - Evaluate how the applicant's stated career goals align with the growth opportunities or objectives outlined in the job offer.
+   - Note any areas where the applicant's goals diverge from the role's focus.
 
 5. **Identify Gaps and Alignments**:
    - Highlight areas where the applicant meets, exceeds, or falls short of the job requirements.
-   - Note any potential for negotiation or clarification based on the applicant’s expectations and the job’s offerings.
+   - Note any potential for negotiation or clarification based on the applicant's expectations and the job's offerings.
 
 # Output
 Provide a detailed, category-by-category comparison in a clear and structured format. Summarize key alignments, major discrepancies, and areas for potential discussion or negotiation. Ensure that the analysis is concise, accurate, and actionable.
@@ -217,28 +217,81 @@ Consider ONLY factors mentioned in the documents like education, experience, ski
 """
 
 # for evaluate.py
-reason_comp_prompt = """
-You're a senior hiring manager at an international company. 
-Your goal is to evaluate the decision making of a junior hiring manager.
+reason_comp_prompt = """You are a Senior Hiring Manager at Weights & Biases. Your task is to evaluate the decision rationale provided by a Junior Hiring Manager about inviting a candidate to interview. You have:
 
-The junior hiring manager should assess whether to invite a candidate to a job interview based on a job position
-and an application provided by an applicant. To justify their decision the junior hiring manager has to provide a 
-reasoning. 
+  • A **reference reasoning** (expert senior hiring manager)  
+  • A **junior reasoning** (the candidate's evaluator)  
 
-Evaluate their reasoning by comparing it to a reference reasoning from a seasoned senior hiring manager. 
-Compare the two reasonings to make sure that the junior hiring manager followed the correct reasoning and thought of the most important points to justify their decision. 
+First, use the following **Explainable 1-5 Rating Scale** to score the junior reasoning on each metric:
 
-Reference Reasoning by senior hiring manager: 
+5 - Outstanding: Exemplary, comprehensive, perfectly aligned with W&B's mission and values.  
+4 - Exceeds Standards: Strong, well-structured, minor omissions only.  
+3 - Meets Standards: Acceptable, covers basics but lacks depth.  
+2 - Below Standards: Superficial or incomplete, missing critical aspects.  
+1 - Unsatisfactory: Fails to address core criteria, includes irrelevant or biased reasoning.  
+
+Then, score the junior reasoning on **eight specific metrics**:
+
+1. Role & Domain Fit  
+2. Technical Rigor  
+3. Values Alignment  
+4. Collaboration Style  
+5. Communication Clarity  
+6. Fairness & Objectivity  
+7. Impact Orientation  
+8. Decision Consistency  
+
+For each metric, output:
+- **Score**: integer 1-5  
+- **Comment**: brief justification citing evidence from the junior reasoning  
+
+Finally, provide an overall **Pass/Fail** recommendation on whether to invite the candidate, plus a one-sentence rationale.
+
+Do **not** output any other text or free-form feedback.
+
+---  
+Reference reasoning:  
 {p1_reasoning}
 
-Reasoning by junior hiring manager:
-{p2_reasoning}
-"""
+Junior reasoning:  
+{p2_reasoning}"""
+
+# Old prompt
+# """
+# You're a senior hiring manager at an international company. 
+# Your goal is to evaluate the decision making of a junior hiring manager.
+
+# The junior hiring manager should assess whether to invite a candidate to a job interview based on a job position
+# and an application provided by an applicant. To justify their decision the junior hiring manager has to provide a 
+# reasoning. 
+
+# Evaluate their reasoning by comparing it to a reference reasoning from a seasoned senior hiring manager. 
+# Compare the two reasonings to make sure that the junior hiring manager followed the correct reasoning and thought of the most important points to justify their decision. 
+
+# Reference Reasoning by senior hiring manager: 
+# {p1_reasoning}
+
+# Reasoning by junior hiring manager:
+# {p2_reasoning}
+# """
+
+class MetricEvaluation(BaseModel):
+    """Class representing the evaluation of a specific scoring metric."""
+    score: int = Field(description="Numeric score from 1-5")
+    comment: str = Field(description="Brief justification for the score")
 
 class ReasonComparison(BaseModel):
-    """Class that checks whether two reasonings are matching."""
-    reasons_match: bool = Field(description="Whether the reasoning of person 2 matches the ground truth reasoning of person 1")
-    explanation: str = Field(description="A short explanation of what parts overlap")
+    """Class representing a detailed evaluation of hiring reasoning."""
+    role_domain_fit: MetricEvaluation = Field(description="Evaluation of Role & Domain Fit (score 1-5 and comment)")
+    technical_rigor: MetricEvaluation = Field(description="Evaluation of Technical Rigor (score 1-5 and comment)")
+    values_alignment: MetricEvaluation = Field(description="Evaluation of Values Alignment (score 1-5 and comment)")
+    collaboration_style: MetricEvaluation = Field(description="Evaluation of Collaboration Style (score 1-5 and comment)")
+    communication_clarity: MetricEvaluation = Field(description="Evaluation of Communication Clarity (score 1-5 and comment)")
+    fairness_objectivity: MetricEvaluation = Field(description="Evaluation of Fairness & Objectivity (score 1-5 and comment)")
+    impact_orientation: MetricEvaluation = Field(description="Evaluation of Impact Orientation (score 1-5 and comment)")
+    decision_consistency: MetricEvaluation = Field(description="Evaluation of Decision Consistency (score 1-5 and comment)")
+    pass_fail: str = Field(description="Overall Pass/Fail recommendation")
+    rationale: str = Field(description="One-sentence rationale for the Pass/Fail recommendation")
 
 
 # for generate.py

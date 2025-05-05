@@ -95,8 +95,30 @@ class ReasonScorer(Scorer):
             request_timeout=60.0,      # Longer timeout
             response_format={"type": "json"}).with_structured_output(ReasonComparison)
         prompt = reason_comp_prompt.format(p1_reasoning=reason, p2_reasoning=model_output["reason"])
-        reason_match = model.invoke(prompt)
-        return {'reason_match': reason_match}
+        evaluation = model.invoke(prompt)
+        
+        # Convert to dictionary format for consistent handling
+        return {
+            'role_domain_fit': evaluation.role_domain_fit,
+            'technical_rigor': evaluation.technical_rigor,
+            'values_alignment': evaluation.values_alignment,
+            'collaboration_style': evaluation.collaboration_style,
+            'communication_clarity': evaluation.communication_clarity,
+            'fairness_objectivity': evaluation.fairness_objectivity,
+            'impact_orientation': evaluation.impact_orientation,
+            'decision_consistency': evaluation.decision_consistency,
+            'pass_fail': evaluation.pass_fail,
+            'rationale': evaluation.rationale,
+            # Add flattened score fields for easier summarization
+            'role_domain_fit_score': evaluation.role_domain_fit.score,
+            'technical_rigor_score': evaluation.technical_rigor.score,
+            'values_alignment_score': evaluation.values_alignment.score,
+            'collaboration_style_score': evaluation.collaboration_style.score,
+            'communication_clarity_score': evaluation.communication_clarity.score,
+            'fairness_objectivity_score': evaluation.fairness_objectivity.score,
+            'impact_orientation_score': evaluation.impact_orientation.score,
+            'decision_consistency_score': evaluation.decision_consistency.score
+        }
         
     def summarize(self, score_rows: list) -> dict:
         """Aggregate reason match scores across all examples.
@@ -107,33 +129,59 @@ class ReasonScorer(Scorer):
         Returns:
             Dictionary with aggregated reason matching metrics
         """
-        # Extract match scores (based on the ReasonComparison class structure which has reasons_match field)
-        match_scores = []
-        for row in score_rows:
-            if isinstance(row['reason_match'], dict) and 'reasons_match' in row['reason_match']:
-                # Convert boolean to numeric score (1.0 for True, 0.0 for False)
-                match_scores.append(1.0 if row['reason_match']['reasons_match'] else 0.0)
-            elif hasattr(row['reason_match'], 'reasons_match'):
-                # Convert boolean to numeric score
-                match_scores.append(1.0 if row['reason_match'].reasons_match else 0.0)
-            else:
-                # If reasons_match is not available, use default value
-                match_scores.append(0.0)
-                
-        # Calculate aggregate statistics
-        avg_match_score = sum(match_scores) / len(match_scores) if match_scores else 0
-        max_score = max(match_scores) if match_scores else 0
-        min_score = min(match_scores) if match_scores else 0
+        # Initialize metric counters
+        metrics = [
+            'role_domain_fit', 'technical_rigor', 'values_alignment', 
+            'collaboration_style', 'communication_clarity', 'fairness_objectivity',
+            'impact_orientation', 'decision_consistency'
+        ]
         
-        # Count perfect matches (score of 1.0 means perfect match)
-        perfect_matches = sum(1 for score in match_scores if score >= 0.9)
-        perfect_match_rate = perfect_matches / len(match_scores) if match_scores else 0
+        # Initialize counters for each metric
+        metric_sums = {metric: 0 for metric in metrics}
+        metric_counts = {metric: 0 for metric in metrics}
+        
+        # Count passes
+        pass_count = 0
+        total_examples = len(score_rows)
+        
+        # Extract scores directly from score rows
+        for row in score_rows:
+            # Count passes based on pass_fail field
+            if 'pass_fail' in row and row['pass_fail'].lower() == 'pass':
+                pass_count += 1
+            
+            # Extract scores from flattened fields
+            for metric in metrics:
+                score_key = f"{metric}_score"
+                if score_key in row:
+                    try:
+                        score = int(row[score_key])
+                        metric_sums[metric] += score
+                        metric_counts[metric] += 1
+                    except (ValueError, TypeError):
+                        # Skip invalid scores
+                        pass
+        
+        # Calculate average scores for each metric
+        avg_scores = {}
+        for metric in metrics:
+            avg_scores[f'avg_{metric}_score'] = (
+                metric_sums[metric] / metric_counts[metric] 
+                if metric_counts[metric] > 0 else 0
+            )
+        
+        # Calculate pass rate
+        pass_rate = pass_count / total_examples if total_examples > 0 else 0
+        
+        # Calculate overall average score across all metrics
+        total_score_sum = sum(metric_sums.values())
+        total_score_count = sum(metric_counts.values())
+        overall_avg_score = total_score_sum / total_score_count if total_score_count > 0 else 0
         
         return {
-            'avg_reason_match_score': avg_match_score,
-            'max_reason_match_score': max_score,
-            'min_reason_match_score': min_score,
-            'perfect_matches': perfect_matches,
-            'perfect_match_rate': perfect_match_rate,
-            'total_examples': len(score_rows)
+            **avg_scores,
+            'pass_rate': pass_rate,
+            'pass_count': pass_count,
+            'overall_avg_score': overall_avg_score,
+            'total_examples': total_examples
         }
