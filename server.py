@@ -16,6 +16,7 @@ from openai import OpenAI
 import boto3
 import os, sys, json, subprocess, shutil
 import asyncio, uuid, nest_asyncio
+import gc
 
 from PIL import Image
 from typing import Optional, List, Any, Union
@@ -35,7 +36,9 @@ from langchain_core.exceptions import LangChainException
 from utils.prompt import (
     CV, Offer, InterviewDecision, 
     context_prompt, guardrail_prompt,
-    extract_offer_prompt, extract_application_prompt, compare_offer_application_prompt)
+    extract_offer_prompt, extract_application_prompt, 
+    compare_offer_application_prompt, reason_comp_prompt,
+    ReasonComparison)
 from utils.prepro import extract_text_from_pdf, pdf_to_images, pre_process_eval
 from utils.evaluate import DecisionScorer, ReasonScorer
 from utils.generate import generate_dataset, generate_applicant_characteristics, calculate_r_score, generate_application_from_characteristics
@@ -93,38 +96,37 @@ def reset_state(state: GraphState) -> GraphState:
     return reset_state
 
 class ExtractJobOffer:
-    def __init__(self, extraction_client) -> None:
+    def __init__(self, extraction_client, extract_offer_prompt) -> None:
         self.extraction_client = extraction_client
+        self.extract_offer_prompt = extract_offer_prompt
 
     @weave.op(name="ExtractJobOfferCall")
     def __call__(self, state: GraphState):
         """Extract the information from the job offer"""
         
         job_offer = extract_text_from_pdf(state["offer_pdf"])
-            
-        latest_offer_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_offer_prompt:latest").get()
-        job_offer_extract = self.extraction_client.invoke(latest_offer_prompt.format(job_offer=job_offer))
+        job_offer_extract = self.extraction_client.invoke(self.extract_offer_prompt.format(job_offer=job_offer))
         state["job_offer_extract"] = job_offer_extract.content
         return state
 
 class ExtractApplication:
-    def __init__(self, extraction_client) -> None:
+    def __init__(self, extraction_client, extract_application_prompt) -> None:
         self.extraction_client = extraction_client
+        self.extract_application_prompt = extract_application_prompt
 
     @weave.op(name="ExtractApplicationCall")
     def __call__(self, state: GraphState):
         """Extract the information from the application"""
         
         application = extract_text_from_pdf(state["application_pdf"])
-            
-        latest_application_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_application_prompt:latest").get()
-        application_extract = self.extraction_client.invoke(latest_application_prompt.format(application=application))
+        application_extract = self.extraction_client.invoke(self.extract_application_prompt.format(application=application))
         state["application_extract"] = application_extract.content
         return state
 
 class CompareApplicationOffer:
-    def __init__(self, comparison_client) -> None:
+    def __init__(self, comparison_client, compare_offer_application_prompt) -> None:
         self.comparison_client = comparison_client
+        self.compare_offer_application_prompt = compare_offer_application_prompt
 
     @weave.op(name="CompareApplicationOfferCall")
     def __call__(self, state: GraphState):
@@ -141,11 +143,11 @@ class CompareApplicationOffer:
         application_extract = state["application_extract"]
         job_offer_extract = state["job_offer_extract"]
         
-        latest_comparison_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/compare_offer_application_prompt:latest").get()
-        comparison_document = latest_comparison_prompt.format(
+        comparison_document = self.compare_offer_application_prompt.format(
             job_offer_extract=job_offer_extract, 
             application_extract=application_extract
         )
+        
         decision = self.comparison_client.invoke(comparison_document)
         state["reason"] = decision.reason
         state["decision"] = decision.decision
@@ -162,8 +164,10 @@ class CompareApplicationOffer:
         return state
 
 class HallucinationGuardrail:
-    def __init__(self, guardrail_client) -> None:
+    def __init__(self, guardrail_client, context_prompt, guardrail_prompt) -> None:
         self.guardrail_client = guardrail_client
+        self.context_prompt = context_prompt
+        self.guardrail_prompt = guardrail_prompt
 
     @weave.op(name="HallucinationGuardrail")
     def __call__(self, state: GraphState):
@@ -173,8 +177,8 @@ class HallucinationGuardrail:
         
         decision_reason = "Decision: We should move on with an interview\n" if state["decision"] else "Decision: We should NOT move on with an interview\n"
         decision_reason += f"Reason: {state['reason']}"
-        latest_context_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/context_prompt:latest").get()
-        context_document = latest_context_prompt.format(
+        
+        context_document = self.context_prompt.format(
             job_offer_extract=job_offer_extract,
             application_extract=application_extract
         )
@@ -243,16 +247,21 @@ def create_wf(
         comparison_client,
         guardrail_client,
         hitl_always_on: bool,
+        extract_offer_prompt,
+        extract_application_prompt,
+        compare_offer_application_prompt,
+        context_prompt,
+        guardrail_prompt,
         disable_expert_review: bool = False):
     # Define the nodes in the workflow
     workflow = StateGraph(GraphState)
     
     # Add a reset state node at the beginning
     workflow.add_node("reset_state", reset_state)
-    workflow.add_node("extract_job_offer", ExtractJobOffer(extraction_client=extraction_client))
-    workflow.add_node("extract_application", ExtractApplication(extraction_client=extraction_client))
-    workflow.add_node("compare_application_offer", CompareApplicationOffer(comparison_client=comparison_client))
-    workflow.add_node("hallucination_guardrail", HallucinationGuardrail(guardrail_client=guardrail_client))
+    workflow.add_node("extract_job_offer", ExtractJobOffer(extraction_client=extraction_client, extract_offer_prompt=extract_offer_prompt))
+    workflow.add_node("extract_application", ExtractApplication(extraction_client=extraction_client, extract_application_prompt=extract_application_prompt))
+    workflow.add_node("compare_application_offer", CompareApplicationOffer(comparison_client=comparison_client, compare_offer_application_prompt=compare_offer_application_prompt))
+    workflow.add_node("hallucination_guardrail", HallucinationGuardrail(guardrail_client=guardrail_client, context_prompt=context_prompt, guardrail_prompt=guardrail_prompt))
     workflow.add_node("expert_review", expert_review)
 
     # Start from 'reset_state' step
@@ -623,6 +632,11 @@ class HiringAgent(weave.Model):
     guardrail_model: str
     hitl_always_on: bool = False
     disable_expert_review: bool = False
+    context_prompt: weave.StringPrompt
+    guardrail_prompt: weave.StringPrompt
+    extract_offer_prompt: weave.StringPrompt
+    extract_application_prompt: weave.StringPrompt
+    compare_offer_application_prompt: weave.StringPrompt
     _app : Any = PrivateAttr()
     _extraction_client = PrivateAttr()
     _comparison_client = PrivateAttr()
@@ -673,6 +687,11 @@ class HiringAgent(weave.Model):
             self._comparison_client,
             self._guardrail_client,
             self.hitl_always_on,
+            self.extract_offer_prompt,
+            self.extract_application_prompt,
+            self.compare_offer_application_prompt,
+            self.context_prompt,
+            self.guardrail_prompt,
             self.disable_expert_review
         )
 
@@ -803,6 +822,27 @@ if __name__ == "__main__":
     load_dotenv("utils/.env")
     st.set_page_config(page_title="Hiring Assistant", layout="wide")
     st.title("Hiring Assistant")
+    
+    # Ensure all prompts are published to Weave
+    try:
+        # Get default entity and project
+        default_entity = os.environ.get("WANDB_ENTITY", "wandb-smle")
+        default_project = os.environ.get("WANDB_PROJECT", "e2e-hiring-assistant-test")
+        
+        # Initialize Weave client early with default entity/project
+        client = weave.init(f"{default_entity}/{default_project}")
+        
+        # Publish reason_comp_prompt if it doesn't exist
+        try:
+            weave.ref(f"weave:///{default_entity}/{default_project}/object/reason_comp_prompt:latest").get()
+            print("reason_comp_prompt already exists in Weave")
+        except:
+            print("Publishing reason_comp_prompt to Weave...")
+            reason_comp_prompt_obj = weave.StringPrompt(reason_comp_prompt)
+            weave.publish(reason_comp_prompt_obj, name="reason_comp_prompt")
+            print("reason_comp_prompt published successfully")
+    except Exception as e:
+        print(f"Error publishing prompts: {str(e)}")
     
     # Initialize session state
     if 'expert_review_needed' not in st.session_state:
@@ -1022,7 +1062,12 @@ if __name__ == "__main__":
         comparison_model=comparison_model,
         guardrail_model=guardrail_model,
         hitl_always_on=hitl_always_on,
-        disable_expert_review=disable_expert_review
+        disable_expert_review=disable_expert_review,
+        context_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/context_prompt:latest").get(),
+        guardrail_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/guardrail_prompt:latest").get(),
+        extract_offer_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_offer_prompt:latest").get(),
+        extract_application_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_application_prompt:latest").get(),
+        compare_offer_application_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/compare_offer_application_prompt:latest").get()
     )
 
     if mode == "Manage Prompts":
@@ -1200,12 +1245,34 @@ if __name__ == "__main__":
                         comparison_model=comparison_model,
                         guardrail_model=guardrail_model,
                         hitl_always_on=False,
-                        disable_expert_review=True
+                        disable_expert_review=True,
+                        context_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/context_prompt:latest").get(),
+                        guardrail_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/guardrail_prompt:latest").get(),
+                        extract_offer_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_offer_prompt:latest").get(),
+                        extract_application_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/extract_application_prompt:latest").get(),
+                        compare_offer_application_prompt=weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/compare_offer_application_prompt:latest").get()
                     )
+                    
+                    # Create evaluation setup
+                    try:
+                        # Try to get reason_comp_prompt from Weave
+                        reason_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/reason_comp_prompt:latest").get()
+                        reason_scorer = ReasonScorer(model_id=judge_model, reason_comp_prompt=reason_prompt)
+                    except Exception as e:
+                        # Fallback to creating a new prompt object if needed
+                        print(f"Warning: Could not load reason_comp_prompt from Weave: {e}")
+                        reason_prompt = weave.StringPrompt(reason_comp_prompt)
+                        # Try to publish it
+                        try:
+                            weave.publish(reason_prompt, name="reason_comp_prompt")
+                            print("Published reason_comp_prompt to Weave")
+                        except Exception as pub_e:
+                            print(f"Could not publish prompt: {pub_e}")
+                        reason_scorer = ReasonScorer(model_id=judge_model, reason_comp_prompt=reason_prompt)
                     
                     benchmark = weave.Evaluation(
                         dataset=weave.ref(dataset_ref).get(),
-                        scorers=[DecisionScorer(), ReasonScorer(model_id=judge_model)],
+                        scorers=[DecisionScorer(), reason_scorer],
                         # replaced lambda to work better with weave versioning
                         preprocess_model_input=pre_process_eval,
                         trials=trials
@@ -1218,7 +1285,6 @@ if __name__ == "__main__":
                     batch_hiring_agent.cleanup()
                     
                     # Force garbage collection to release file descriptors
-                    import gc
                     collected = gc.collect()
                     st.info(f"Resource cleanup complete. Released {collected} objects.")
                     

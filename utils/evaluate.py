@@ -86,6 +86,7 @@ class DecisionScorer(Scorer):
 # to score whether the reasoning matches
 class ReasonScorer(Scorer):
     model_id: str = "gpt-4o"
+    reason_comp_prompt: weave.StringPrompt
 
     @weave.op
     def score(self, reason: str, model_output: dict) -> dict:
@@ -94,7 +95,8 @@ class ReasonScorer(Scorer):
             max_retries=5,             # Built-in retry mechanism
             request_timeout=60.0,      # Longer timeout
             response_format={"type": "json"}).with_structured_output(ReasonComparison)
-        prompt = reason_comp_prompt.format(p1_reasoning=reason, p2_reasoning=model_output["reason"])
+        
+        prompt = self.reason_comp_prompt.format(p1_reasoning=reason, p2_reasoning=model_output["reason"])
         evaluation = model.invoke(prompt)
         
         # Convert to dictionary format for consistent handling
