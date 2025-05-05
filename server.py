@@ -817,6 +817,15 @@ def validate_api_keys(comparison_model):
     
     return missing_keys, invalid_keys
 
+# Function to check if prompts exist in Weave
+def check_prompt_exists(prompt_id, entity, project):
+    """Check if a prompt exists in Weave and return True if it does, False otherwise."""
+    try:
+        weave.ref(f"weave:///{entity}/{project}/object/{prompt_id}:latest").get()
+        return True
+    except Exception:
+        return False
+
 if __name__ == "__main__":
     # Setup
     load_dotenv("utils/.env")
@@ -831,18 +840,8 @@ if __name__ == "__main__":
         
         # Initialize Weave client early with default entity/project
         client = weave.init(f"{default_entity}/{default_project}")
-        
-        # Publish reason_comp_prompt if it doesn't exist
-        try:
-            weave.ref(f"weave:///{default_entity}/{default_project}/object/reason_comp_prompt:latest").get()
-            print("reason_comp_prompt already exists in Weave")
-        except:
-            print("Publishing reason_comp_prompt to Weave...")
-            reason_comp_prompt_obj = weave.StringPrompt(reason_comp_prompt)
-            weave.publish(reason_comp_prompt_obj, name="reason_comp_prompt")
-            print("reason_comp_prompt published successfully")
     except Exception as e:
-        print(f"Error publishing prompts: {str(e)}")
+        print(f"Error initializing Weave client: {str(e)}")
     
     # Initialize session state
     if 'expert_review_needed' not in st.session_state:
@@ -1057,6 +1056,26 @@ if __name__ == "__main__":
             st.info("File limit information not available")
 
     # Initialize agent with selected configuration
+    # First check if all required prompts exist in Weave
+    required_prompts = [
+        "context_prompt", 
+        "guardrail_prompt", 
+        "extract_offer_prompt", 
+        "extract_application_prompt", 
+        "compare_offer_application_prompt"
+    ]
+    
+    missing_prompts = []
+    for prompt_id in required_prompts:
+        if not check_prompt_exists(prompt_id, wandb_entity, wandb_project):
+            missing_prompts.append(prompt_id)
+    
+    if missing_prompts and mode != "Manage Prompts":
+        prompt_list = ", ".join(missing_prompts)
+        st.error(f"⚠️ Missing prompts in Weave: {prompt_list}")
+        st.warning("Please go to 'Manage Prompts' tab and publish all required prompts before using the application.")
+        st.stop()  # Stop execution if prompts are missing and not in Manage Prompts mode
+        
     hiring_agent = HiringAgent(
         extraction_model=extraction_model,
         comparison_model=comparison_model,
@@ -1099,16 +1118,41 @@ if __name__ == "__main__":
                 "name": "Compare Offer Application Prompt",
                 "description": "Compares job offers and applications to make hiring decisions",
                 "content": compare_offer_application_prompt
+            },
+            "reason_comp_prompt": {
+                "name": "Reason Comparison Prompt",
+                "description": "Used for evaluating the reasoning of the decision model",
+                "content": reason_comp_prompt
             }
         }
+        
+        # Display overall prompt status
+        st.subheader("Prompt Status")
+        status_cols = st.columns(len(prompts))
+        
+        for i, (prompt_id, prompt_info) in enumerate(prompts.items()):
+            exists = check_prompt_exists(prompt_id, wandb_entity, wandb_project)
+            with status_cols[i]:
+                if exists:
+                    st.success(f"{prompt_info['name']}: ✅")
+                else:
+                    st.error(f"{prompt_info['name']}: ❌")
+        
+        st.write("---")
         
         # Create tabs for each prompt
         tabs = st.tabs(list(prompts.keys()))
         
         for tab, (prompt_id, prompt_info) in zip(tabs, prompts.items()):
             with tab:
+                # Check if this prompt exists
+                exists = check_prompt_exists(prompt_id, wandb_entity, wandb_project)
+                
                 st.subheader(prompt_info["name"])
                 st.write(prompt_info["description"])
+                
+                if not exists:
+                    st.warning(f"⚠️ This prompt has not been published yet. Click 'Publish {prompt_info['name']}' below to make it available to the application.")
                 
                 # Get latest version of the prompt
                 try:
@@ -1238,6 +1282,12 @@ if __name__ == "__main__":
         if st.button("Run Evaluation"):
             with st.spinner("Running batch evaluation..."):
                 try:
+                    # Check if reason_comp_prompt exists in Weave
+                    if not check_prompt_exists("reason_comp_prompt", wandb_entity, wandb_project):
+                        st.error("⚠️ The 'reason_comp_prompt' is missing in Weave")
+                        st.warning("Please go to 'Manage Prompts' tab and publish the 'Reason Comparison Prompt' before running batch evaluation.")
+                        st.stop()  # Stop execution if reason_comp_prompt is missing
+                    
                     # Create a dedicated batch agent only when running the evaluation
                     # This avoids creating a separate agent just for configuration
                     batch_hiring_agent = HiringAgent(
@@ -1254,21 +1304,9 @@ if __name__ == "__main__":
                     )
                     
                     # Create evaluation setup
-                    try:
-                        # Try to get reason_comp_prompt from Weave
-                        reason_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/reason_comp_prompt:latest").get()
-                        reason_scorer = ReasonScorer(model_id=judge_model, reason_comp_prompt=reason_prompt)
-                    except Exception as e:
-                        # Fallback to creating a new prompt object if needed
-                        print(f"Warning: Could not load reason_comp_prompt from Weave: {e}")
-                        reason_prompt = weave.StringPrompt(reason_comp_prompt)
-                        # Try to publish it
-                        try:
-                            weave.publish(reason_prompt, name="reason_comp_prompt")
-                            print("Published reason_comp_prompt to Weave")
-                        except Exception as pub_e:
-                            print(f"Could not publish prompt: {pub_e}")
-                        reason_scorer = ReasonScorer(model_id=judge_model, reason_comp_prompt=reason_prompt)
+                    # Get reason_comp_prompt from Weave (already checked that it exists)
+                    reason_prompt = weave.ref(f"weave:///{wandb_entity}/{wandb_project}/object/reason_comp_prompt:latest").get()
+                    reason_scorer = ReasonScorer(model_id=judge_model, reason_comp_prompt=reason_prompt)
                     
                     benchmark = weave.Evaluation(
                         dataset=weave.ref(dataset_ref).get(),
