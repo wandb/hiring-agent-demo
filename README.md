@@ -36,7 +36,7 @@ To run the fine-tuned comparison model first click on "Add Model to Ollama" if y
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt # requirements_relaxed.txt if problems
 ```
 2. Create `utils/.env` file with your API keys:
 ```bash
@@ -59,6 +59,22 @@ WANDB_API_KEY=your_wandb_api_key
     - Will then call `ollama create <model-name> -f Modelfile` from the root of the downloaded artifact (where the fine-tuning notebook adds a Modelfile automatically)
 3. If you want to use parallel calls make sure to serve the ollama server with `OLLAMA_NUM_PARALLEL=<number-of-parallel-calls> ollama serve`
 4. Now when use the single evaluation or the batch testing mode with the model
+
+## Improve reason labels in datasets
+The repository includes a script for enhancing the reason labels in training and evaluation datasets:
+```bash
+python improve_reason_labels.py
+```
+
+This script:
+- Downloads the finetuning and evaluation datasets from W&B artifacts
+- Uses OpenAI's GPT-4o to generate high-quality, detailed hiring reasons
+- Reasons are structured to analyze position fit, experience, and values alignment
+- Processes examples in parallel (10 threads) for faster execution
+- Maintains proper artifact lineage with W&B
+- Publishes improved datasets to both W&B (with "annotated" alias) and Weave
+
+Run this script to generate better ground truth reasons for evaluating hiring agent performance.
 
 ## Set fine-tuned model as endpoint for Weave playground
 1. Make sure the model runs on Ollama (following above guide will suffice)

@@ -101,25 +101,19 @@ class ReasonScorer(Scorer):
         
         # Convert to dictionary format for consistent handling
         return {
-            'role_domain_fit': evaluation.role_domain_fit,
-            'technical_rigor': evaluation.technical_rigor,
+            'position_fit_analysis': evaluation.position_fit_analysis,
+            'experience_analysis': evaluation.experience_analysis,
             'values_alignment': evaluation.values_alignment,
-            'collaboration_style': evaluation.collaboration_style,
-            'communication_clarity': evaluation.communication_clarity,
+            'provided_evidence': evaluation.provided_evidence,
             'fairness_objectivity': evaluation.fairness_objectivity,
-            'impact_orientation': evaluation.impact_orientation,
-            'decision_consistency': evaluation.decision_consistency,
             'pass_fail': evaluation.pass_fail,
             'rationale': evaluation.rationale,
             # Add flattened score fields for easier summarization
-            'role_domain_fit_score': evaluation.role_domain_fit.score,
-            'technical_rigor_score': evaluation.technical_rigor.score,
+            'position_fit_analysis_score': evaluation.position_fit_analysis.score,
+            'experience_analysis_score': evaluation.experience_analysis.score,
             'values_alignment_score': evaluation.values_alignment.score,
-            'collaboration_style_score': evaluation.collaboration_style.score,
-            'communication_clarity_score': evaluation.communication_clarity.score,
-            'fairness_objectivity_score': evaluation.fairness_objectivity.score,
-            'impact_orientation_score': evaluation.impact_orientation.score,
-            'decision_consistency_score': evaluation.decision_consistency.score
+            'provided_evidence_score': evaluation.provided_evidence.score,
+            'fairness_objectivity_score': evaluation.fairness_objectivity.score
         }
         
     def summarize(self, score_rows: list) -> dict:
@@ -133,9 +127,8 @@ class ReasonScorer(Scorer):
         """
         # Initialize metric counters
         metrics = [
-            'role_domain_fit', 'technical_rigor', 'values_alignment', 
-            'collaboration_style', 'communication_clarity', 'fairness_objectivity',
-            'impact_orientation', 'decision_consistency'
+            'position_fit_analysis', 'experience_analysis', 'values_alignment', 
+            'provided_evidence', 'fairness_objectivity'
         ]
         
         # Initialize counters for each metric

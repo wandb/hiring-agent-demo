@@ -219,41 +219,38 @@ Consider ONLY factors mentioned in the documents like education, experience, ski
 # for evaluate.py
 reason_comp_prompt = """You are a Senior Hiring Manager at Weights & Biases. Your task is to evaluate the decision rationale provided by a Junior Hiring Manager about inviting a candidate to interview. You have:
 
-  • A **reference reasoning** (expert senior hiring manager)  
-  • A **junior reasoning** (the candidate's evaluator)  
+- A **reference hiring reason** (reason given by another senior hiring manager to guide your evaluation)  
+- A **junior hiring reason** (reason given  by the junior hiring manager)  
 
-First, use the following **Explainable 1-5 Rating Scale** to score the junior reasoning on each metric:
+First, use the following **Explainable 1-5 Rating Scale** to score the hiring reason that the junior hiring manager gave for their decision:
 
-5 - Outstanding: Exemplary, comprehensive, perfectly aligned with W&B's mission and values.  
+5 - Outstanding: Exemplary, comprehensive, perfectly aligned with W&B's hiring standards.
 4 - Exceeds Standards: Strong, well-structured, minor omissions only.  
 3 - Meets Standards: Acceptable, covers basics but lacks depth.  
 2 - Below Standards: Superficial or incomplete, missing critical aspects.  
 1 - Unsatisfactory: Fails to address core criteria, includes irrelevant or biased reasoning.  
 
-Then, score the junior reasoning on **eight specific metrics**:
+Then, score the hiring reason provided by the junior hiring manager based on **five specific metrics**:
 
-1. Role & Domain Fit  
-2. Technical Rigor  
-3. Values Alignment  
-4. Collaboration Style  
-5. Communication Clarity  
-6. Fairness & Objectivity  
-7. Impact Orientation  
-8. Decision Consistency  
+1. Position Fit Analysis - did the junior manager validate whether the candidate's location, salary expectations, and general profile match the job description?
+2. Experience Analysis - did the junior hiring manager validate whether the experience of the candidate matches the job requirements?
+3. Values Alignment  - did the junior hiring manager validate whether the candidate is aligned with the values of Weights & Biases (Honesty, Curiosity, Gumption, Grit)? 
+4. Provided Evidence - did the junior hiring manager provide evidence for each of the statements in the hiring decision?
+5. Fairness & Objectivity  - did the junior hiring manager only make unbiased arguments in their decision?
 
 For each metric, output:
 - **Score**: integer 1-5  
-- **Comment**: brief justification citing evidence from the junior reasoning  
+- **Comment**: brief justification citing evidence from the junior hiring manager's provided reason
 
-Finally, provide an overall **Pass/Fail** recommendation on whether to invite the candidate, plus a one-sentence rationale.
+Finally, provide an overall **Pass/Fail** recommendation on whether the reason provided by the junior hiring manager is valid to support the hiring decision. Be strict on whether the given hiring reason lives up to our hiring standards by performing well on the metrics.
 
-Do **not** output any other text or free-form feedback.
+Do **not** output any other text or free-form feedback. Do **not** give any judgement on the actual candidate, focus only on the the junior hiring manager's reason.
 
 ---  
-Reference reasoning:  
+Reference hiring reason provided by colleague senior hiring manager:  
 {p1_reasoning}
 
-Junior reasoning:  
+Hiring reason provided by junior hiring manager:  
 {p2_reasoning}"""
 
 # Old prompt
@@ -282,14 +279,11 @@ class MetricEvaluation(BaseModel):
 
 class ReasonComparison(BaseModel):
     """Class representing a detailed evaluation of hiring reasoning."""
-    role_domain_fit: MetricEvaluation = Field(description="Evaluation of Role & Domain Fit (score 1-5 and comment)")
-    technical_rigor: MetricEvaluation = Field(description="Evaluation of Technical Rigor (score 1-5 and comment)")
-    values_alignment: MetricEvaluation = Field(description="Evaluation of Values Alignment (score 1-5 and comment)")
-    collaboration_style: MetricEvaluation = Field(description="Evaluation of Collaboration Style (score 1-5 and comment)")
-    communication_clarity: MetricEvaluation = Field(description="Evaluation of Communication Clarity (score 1-5 and comment)")
-    fairness_objectivity: MetricEvaluation = Field(description="Evaluation of Fairness & Objectivity (score 1-5 and comment)")
-    impact_orientation: MetricEvaluation = Field(description="Evaluation of Impact Orientation (score 1-5 and comment)")
-    decision_consistency: MetricEvaluation = Field(description="Evaluation of Decision Consistency (score 1-5 and comment)")
+    position_fit_analysis: MetricEvaluation = Field(description="Evaluation of whether the junior manager validated if the candidate's location, salary expectations, and general profile match the job description")
+    experience_analysis: MetricEvaluation = Field(description="Evaluation of whether the junior hiring manager validated if the experience of the candidate matches the job requirements")
+    values_alignment: MetricEvaluation = Field(description="Evaluation of whether the junior hiring manager validated if the candidate is aligned with the values of Weights & Biases (Honesty, Curiosity, Gumption, Grit)")
+    provided_evidence: MetricEvaluation = Field(description="Evaluation of whether the junior hiring manager provided evidence for each of the statements in the hiring decision")
+    fairness_objectivity: MetricEvaluation = Field(description="Evaluation of whether the junior hiring manager only made unbiased arguments in their decision")
     pass_fail: str = Field(description="Overall Pass/Fail recommendation")
     rationale: str = Field(description="One-sentence rationale for the Pass/Fail recommendation")
 
