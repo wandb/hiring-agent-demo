@@ -52,13 +52,61 @@ WANDB_API_KEY=your_wandb_api_key
     - From config panel select "Manage Prompts" and publish all defaults for every tab
 5. Run single test or whole evaluation
 
-## Use fine-tuned comparison model
+## Use fine-tuned model as comparison model
 1. Based on your dataset fine-tune your comparison model in [this notebook](https://colab.research.google.com/drive/1zfhbL9KwUbbCcSvy46alJDCZY7TwSVIO?usp=sharing)
 2. Paste in artifact path into config panel, select `custom-wandb-artifact-model` under "Comparison Model" and click the button "Add Model to Ollama"
     - This will download the artifact from wandb
     - Will then call `ollama create <model-name> -f Modelfile` from the root of the downloaded artifact (where the fine-tuning notebook adds a Modelfile automatically)
 3. If you want to use parallel calls make sure to serve the ollama server with `OLLAMA_NUM_PARALLEL=<number-of-parallel-calls> ollama serve`
 4. Now when use the single evaluation or the batch testing mode with the model
+
+## Set fine-tuned model as endpoint for Weave playground
+1. Make sure the model runs on Ollama (following above guide will suffice)
+2. Start ngrok: `ngrok http 11434 --response-header-add "Access-Control-Allow-Origin: *" --host-header rewrite`
+3. Configure in Weave UI
+    - Add ngrok address without the `v1`
+    - Add random secret
+4. Open Playground and debug with the actual model
+
+# Model and Dataset Improvements
+## GPT-4o-mini Fine-Tuning with Weights & Biases
+
+This repository includes a script for fine-tuning OpenAI's GPT-4o-mini model using datasets stored in W&B:
+
+```bash
+python utils/fine_tune_gpt4o_mini.py
+```
+
+### Features
+- Retrieves dataset from W&B artifacts
+- Validates and analyzes the dataset (token counts, format checking)
+- Splits data into training and validation sets
+- Recommends optimal epochs based on dataset size
+- Provides token usage estimates for cost planning
+- Logs comprehensive metrics to W&B dashboard
+- Optional evaluation on the fine-tuned model
+
+### Prerequisites
+- OpenAI API key with fine-tuning access
+- W&B account and properly formatted dataset
+
+### Setup
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Set environment variables:
+   ```bash
+   export OPENAI_API_KEY="your_openai_api_key"
+   export WANDB_API_KEY="your_wandb_api_key" 
+   export WANDB_ENTITY="your_wandb_username_or_team"
+   export WANDB_PROJECT="your_wandb_project"
+   # Optional: Enable evaluation after fine-tuning
+   export RUN_EVALUATION="true"
+   ```
+
+The fine-tuning progress can be monitored in your W&B dashboard, with logs of training metrics, dataset statistics, and model performance.
 
 ## Improve reason labels in datasets
 The repository includes a script for enhancing the reason labels in training and evaluation datasets:
@@ -75,11 +123,3 @@ This script:
 - Publishes improved datasets to both W&B (with "annotated" alias) and Weave
 
 Run this script to generate better ground truth reasons for evaluating hiring agent performance.
-
-## Set fine-tuned model as endpoint for Weave playground
-1. Make sure the model runs on Ollama (following above guide will suffice)
-2. Start ngrok: `ngrok http 11434 --response-header-add "Access-Control-Allow-Origin: *" --host-header rewrite`
-3. Configure in Weave UI
-    - Add ngrok address without the `v1`
-    - Add random secret
-4. Open Playground and debug with the actual model
