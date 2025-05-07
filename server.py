@@ -62,7 +62,7 @@ if 'application_extract' not in st.session_state:
     st.session_state.application_extract = ""
 
 # possible models
-openai_models = ["gpt-4o-mini", "gpt-4o"]
+openai_models = ["gpt-4o-mini", "gpt-4o", "ft:gpt-4o-mini-2024-07-18:weights-biases::BUfazcLq"]
 
 # Define the data model for the graph state
 class GraphState(TypedDict):

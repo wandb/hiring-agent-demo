@@ -76,6 +76,45 @@ This script:
 
 Run this script to generate better ground truth reasons for evaluating hiring agent performance.
 
+## GPT-4o-mini Fine-Tuning with Weights & Biases
+
+This repository includes a script for fine-tuning OpenAI's GPT-4o-mini model using datasets stored in W&B:
+
+```bash
+python utils/fine_tune_gpt4o_mini.py
+```
+
+### Features
+- Retrieves dataset from W&B artifacts
+- Validates and analyzes the dataset (token counts, format checking)
+- Splits data into training and validation sets
+- Recommends optimal epochs based on dataset size
+- Provides token usage estimates for cost planning
+- Logs comprehensive metrics to W&B dashboard
+- Optional evaluation on the fine-tuned model
+
+### Prerequisites
+- OpenAI API key with fine-tuning access
+- W&B account and properly formatted dataset
+
+### Setup
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Set environment variables:
+   ```bash
+   export OPENAI_API_KEY="your_openai_api_key"
+   export WANDB_API_KEY="your_wandb_api_key" 
+   export WANDB_ENTITY="your_wandb_username_or_team"
+   export WANDB_PROJECT="your_wandb_project"
+   # Optional: Enable evaluation after fine-tuning
+   export RUN_EVALUATION="true"
+   ```
+
+The fine-tuning progress can be monitored in your W&B dashboard, with logs of training metrics, dataset statistics, and model performance.
+
 ## Set fine-tuned model as endpoint for Weave playground
 1. Make sure the model runs on Ollama (following above guide will suffice)
 2. Start ngrok: `ngrok http 11434 --response-header-add "Access-Control-Allow-Origin: *" --host-header rewrite`
