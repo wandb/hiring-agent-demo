@@ -28,6 +28,8 @@ Once the operator UI is launched through streamlit there are four modes that can
     - Turn expert review mode off (not compatible because of parallel evaluation yet)
     - Paste in weave URL of evaluation dataset that you generated
     - Run evaluation
+5. `Monitoring Dashboard`
+    - Explore key monitoring metrics over time - based on Weave API
 
 To run the fine-tuned comparison model first click on "Add Model to Ollama" if you haven't yet installed the model locally and then select `custom-wandb-artifact-model` in the "Comparison Model" dropdown.
 
@@ -74,7 +76,7 @@ WANDB_API_KEY=your_wandb_api_key
 This repository includes a script for fine-tuning OpenAI's GPT-4o-mini model using datasets stored in W&B:
 
 ```bash
-python utils/fine_tune_gpt4o_mini.py
+python utils/finetune_openai.py
 ```
 
 ### Features

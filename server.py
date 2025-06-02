@@ -42,6 +42,7 @@ from utils.prompt import (
 from utils.prepro import extract_text_from_pdf, pdf_to_images, pre_process_eval
 from utils.evaluate import DecisionScorer, ReasonScorer
 from utils.generate import generate_dataset, generate_applicant_characteristics, calculate_r_score, generate_application_from_characteristics
+from utils.monitoring_dashboard import render_monitoring_dashboard
 from dotenv import load_dotenv
 
 # Apply nest_asyncio at the module level to allow nested event loops
@@ -887,7 +888,7 @@ if __name__ == "__main__":
         # Initialize Weave client with the provided entity and project
         client = weave.init(f"{wandb_entity}/{wandb_project}")
         
-        mode = st.selectbox("Select Mode", ["Create Dataset", "Manage Prompts", "Single Test", "Batch Testing"])
+        mode = st.selectbox("Select Mode", ["Create Dataset", "Manage Prompts", "Single Test", "Batch Testing", "Monitoring Dashboard"])
         
         st.subheader("Model Settings")
         extraction_model = st.selectbox("Extraction Model", openai_models)
@@ -1332,6 +1333,9 @@ if __name__ == "__main__":
                     if 'batch_hiring_agent' in locals():
                         batch_hiring_agent.cleanup()
                         gc.collect()
+    # Add this to handle the new "Monitoring Dashboard" mode
+    elif mode == "Monitoring Dashboard":
+        render_monitoring_dashboard()
     # Add this to the "Create Dataset" section in the main function
     else:  # Create Dataset
         st.header("Create Evaluation Dataset")

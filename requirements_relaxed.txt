@@ -1,3 +1,4 @@
+# python3.9 needs to be used for weave[scorers]
 aiohttp
 altair
 annotated-types
@@ -84,4 +85,7 @@ urllib3
 wandb
 weave
 xxhash
-nest-asyncio 
+nest-asyncio
+fastapi[standard]
+weave[scorers]
+plotly
