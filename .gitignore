@@ -51,8 +51,8 @@ secrets.env
 !.env.example
 
 # Data files
-utils/data/applications/
-utils/data/offers/
+#utils/data/applications/
+#utils/data/offers/
 
 # Distribution / packaging
 .Python
