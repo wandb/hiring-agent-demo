@@ -52,7 +52,7 @@ langgraph-sdk==0.1.61
 langsmith==0.3.24
 litellm
 markdown-it-py==3.0.0
-marshmallow==3.26.1
+marshmallow==3.26.2
 mypy-extensions==1.0.0
 numpy==1.26.4
 ollama==0.4.7
