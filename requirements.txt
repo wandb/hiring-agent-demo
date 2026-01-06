@@ -1,4 +1,4 @@
-aiohttp==3.11.16
+aiohttp==3.13.3
 altair==5.5.0
 annotated-types==0.7.0
 anyio==4.9.0
